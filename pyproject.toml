@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stock-analyser"
+version = "0.1.0"
+description = "Local stock market analyser CLI"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "platformdirs>=4.3,<5",
+  "pydantic>=2.10,<3",
+  "questionary>=2.1,<3",
+  "rich>=13.9,<15",
+  "typer>=0.27.3,<1",
+]
+
+[project.scripts]
+stock-analyser = "stock_analyser.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10", "ruff>=0.9,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stock_analyser"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/stock_analyser/cli.py" = ["B008"]

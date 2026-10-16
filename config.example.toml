@@ -1,0 +1,13 @@
+# Copy to your user configuration directory, or pass --config /path/to/config.toml.
+# All paths are optional. Relative paths resolve beside this configuration file.
+# No credentials belong in this file. Live integrations will use environment
+# variables / the AWS SDK credential chain when those workflows are implemented.
+market = "US"
+
+[paths]
+# data_dir = "/absolute/path/to/stock-analyser"
+# database_dir = "/absolute/path/to/databases"
+# snapshots_dir = "/absolute/path/to/snapshots"
+# cache_dir = "/absolute/path/to/cache"
+# reports_dir = "/absolute/path/to/reports"
+# logs_dir = "/absolute/path/to/logs"

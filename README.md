@@ -1,6 +1,66 @@
 # Stock market analyser
 
-Architecture and provider-evaluation workspace. Documentation consolidated on **10 October 2026**. Application implementation has not started; the Python scripts here are isolated, read-only evaluation tools.
+Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issue [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) adds installation, configuration, the command menu, and setup diagnostics. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
+
+## Install and launch
+
+Use **Python 3.12** and [uv](https://docs.astral.sh/uv/getting-started/installation/). From a clean checkout:
+
+```sh
+uv python install 3.12
+uv sync --locked
+uv run --locked stock-analyser --help
+uv run --locked stock-analyser
+```
+
+`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and setup commands needs no provider credentials or network. Evaluation results and `.env.local` are not required or loaded by the application.
+
+The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
+
+For an installation without development tools, use `uv sync --locked --no-dev`. After syncing, the entry point is also available as `.venv/bin/stock-analyser` (Windows: `.venv\Scripts\stock-analyser.exe`), or after activating the environment as `stock-analyser`.
+
+## Local configuration and runtime files
+
+```sh
+uv run --locked stock-analyser doctor
+uv run --locked stock-analyser --config config.example.toml doctor
+uv run --locked stock-analyser --data-dir /absolute/path/to/runtime init
+```
+
+`doctor` prints resolved directories, package version, Git commit and dirty state when available, and a SHA-256 fingerprint of the effective runtime configuration. It makes no provider calls or writes. `init` creates directories only; database migrations and business rules belong to later stories. The menu and help do not create runtime files.
+
+Copy [config.example.toml](config.example.toml) to the user configuration location shown by `platformdirs`, or pass `--config /path/to/config.toml`. Defaults are outside the source checkout:
+
+- macOS: configuration at `~/Library/Application Support/stock-analyser/config.toml`; runtime data at `~/Library/Application Support/stock-analyser/`.
+- Linux: configuration at `~/.config/stock-analyser/config.toml`; runtime data at `~/.local/share/stock-analyser/` (respects XDG directory settings).
+- Windows: configuration and runtime data under `%LOCALAPPDATA%\stock-analyser\`.
+
+The data directory contains `database/`, `snapshots/`, `cache/`, `reports/`, and `logs/`. These are reserved runtime locations; this story logs only to stderr. Each directory can be overridden independently. Relative configured paths resolve beside the configuration file; relative CLI/environment overrides use that same base (the default user configuration directory when no file is supplied). Prefer absolute paths for overrides.
+
+Configuration precedence is CLI options → environment variables → TOML → defaults. Supported variables are `STOCK_ANALYSER_CONFIG`, `STOCK_ANALYSER_MARKET`, `STOCK_ANALYSER_DATA_DIR`, `STOCK_ANALYSER_DATABASE_DIR`, `STOCK_ANALYSER_SNAPSHOTS_DIR`, `STOCK_ANALYSER_CACHE_DIR`, `STOCK_ANALYSER_REPORTS_DIR`, and `STOCK_ANALYSER_LOGS_DIR`. Explicit child-directory overrides take precedence over the data-directory default. A missing explicitly requested configuration file, malformed TOML, unknown settings, or unsupported market fails clearly. Only `US` is enabled.
+
+Keep provider credentials in environment variables or a local secrets mechanism; AWS integration will use the SDK credential chain. Credentials do not belong in TOML. The example contains no secrets. Terminal errors and the application's logging formatter redact known credential environment values, API-key/token/password assignments, and bearer tokens. Configuration validation never echoes invalid input values. Optional credentials are not validated or required for these offline commands.
+
+## Source version and focused verification
+
+This checkout already has Git initialized. For a source folder without `.git`, initialize local version control with `git init` and make a reviewed initial commit; no remote is required. Check `git status --short` before committing, and keep credentials, environments, and runtime data outside tracked files. `doctor` records the current commit and whether the checkout has uncommitted changes. A wheel installation or a source folder without Git reports `null` for commit/dirty state and retains the package version; record the source commit separately when distributing a wheel. Future analysis runs can consume this provenance helper.
+
+```sh
+uv run --locked pytest -q
+uv run --locked ruff check src tests
+uv run --locked ruff format --check src tests
+uv run --locked stock-analyser --help
+printf '1\n6\n' | uv run --locked stock-analyser
+uv run --locked stock-analyser --config config.example.toml doctor
+```
+
+Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Provider calls, database rules, reports, and trading decisions are outside US-001.
+
+## Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests targeting `main`, pushes to `main`, and merge-queue checks. The `Tests (Python 3.12)` check installs locked dependencies on Ubuntu, runs the test suite, checks lint and formatting, and launches CLI help. It needs no provider credentials. Actions and uv versions are pinned; superseded runs are cancelled automatically.
+
+To enforce this before merging, `main` branch protection must require the `Tests (Python 3.12)` status check with the branch up to date. Keep that required check name aligned with the workflow job name when editing CI.
 
 ## Documentation
 
@@ -41,5 +101,4 @@ Complete sector-universe eligibility/classification and liquidity selection; ver
 
 ## Local files and credentials
 
-The scripts and dependency versions are in `evaluation/`. The API key stays in gitignored `.env.local`; no key is embedded in documentation or saved results. Virtual environments, provider cookie caches and raw results are also gitignored. The raw evidence is saved in this folder but would not be included in a future Git commit unless explicitly selected after checking retention/sharing requirements. No remote backup, publishing or repository push has been performed.
-# AlphaSnitch
+The evaluation scripts and their dependency versions are in `evaluation/`. The API key stays in gitignored `.env.local`; no key is embedded in documentation or saved results. Virtual environments, provider cookie caches and raw results are also gitignored. Raw evidence is saved locally and is not required by the installable CLI or its tests.
