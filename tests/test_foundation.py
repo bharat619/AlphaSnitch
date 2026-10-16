@@ -2,6 +2,8 @@ import io
 import json
 import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -152,6 +154,67 @@ def test_logs_redact_format_arguments_and_tracebacks(monkeypatch):
     assert "aws-sensitive-value" not in output.getvalue()
     assert "unknown-key" not in output.getvalue()
     assert "ValueError" in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "secret", ['prefix"private-tail', r"prefix\private-tail", 'pré"private-tail\n']
+)
+def test_doctor_redacts_credentials_before_json_serialization(monkeypatch, tmp_path, secret):
+    monkeypatch.setenv("MASSIVE_API_KEY", secret)
+    result = runner.invoke(app, ["--data-dir", str(tmp_path / secret), "doctor"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["runtime"]["data_dir"] == str(tmp_path / "[REDACTED]")
+    assert "private-tail" not in result.output
+
+
+@pytest.mark.parametrize(
+    "secret", ['prefix"private-tail', r"prefix\private-tail", 'pré"private-tail\n']
+)
+def test_logs_redact_serialized_and_structured_values(monkeypatch, secret):
+    monkeypatch.setenv("MASSIVE_API_KEY", secret)
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(RedactingFormatter("%(message)s"))
+    logger = logging.Logger("escaped-credentials")
+    logger.addHandler(handler)
+    logger.info({"response": [secret]})
+    for ensure_ascii in (True, False):
+        logger.info("response: %s", json.dumps({"message": secret}, ensure_ascii=ensure_ascii))
+    assert "private-tail" not in output.getvalue()
+    assert output.getvalue().count("[REDACTED]") == 3
+
+
+def test_redaction_handles_unknown_credentials_with_escaped_quotes():
+    payload = json.dumps({"api_key": 'prefix"private-tail', "symbol": "AAPL"})
+    safe = redact(payload, {})
+    assert "private-tail" not in safe
+    assert json.loads(safe) == {"api_key": "[REDACTED]", "symbol": "AAPL"}
+
+
+def test_utf8_configuration_loads_under_ascii_locale(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_bytes('[paths]\nreports_dir = "café"\n'.encode())
+    env = {key: value for key, value in os.environ.items() if not key.startswith("STOCK_ANALYSER_")}
+    env.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys; from pathlib import Path; "
+                "from stock_analyser.config import load_runtime; "
+                "print(json.dumps(str(load_runtime(Path(sys.argv[1])).reports_dir)))"
+            ),
+            str(config),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="ascii",
+        check=True,
+    )
+    assert json.loads(result.stdout) == str(tmp_path / "café")
 
 
 def test_example_configuration_is_valid():

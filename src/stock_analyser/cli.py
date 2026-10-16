@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from stock_analyser.config import Runtime, load_runtime
-from stock_analyser.security import configure_logging, redact, safe_error
+from stock_analyser.security import configure_logging, redact, redact_values, safe_error
 from stock_analyser.version import source_version
 
 app = typer.Typer(
@@ -96,17 +96,21 @@ def doctor(ctx: typer.Context) -> None:
     configuration_hash = hashlib.sha256(
         json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    display(
+    console.print(
         json.dumps(
-            {
-                "runtime": configuration,
-                "configuration_sha256": configuration_hash,
-                "source": source_version(),
-                "workflows": "unavailable — not implemented",
-                "offline_ready": True,
-            },
+            redact_values(
+                {
+                    "runtime": configuration,
+                    "configuration_sha256": configuration_hash,
+                    "source": source_version(),
+                    "workflows": "unavailable — not implemented",
+                    "offline_ready": True,
+                }
+            ),
             indent=2,
-        )
+        ),
+        markup=False,
+        soft_wrap=True,
     )
 
 

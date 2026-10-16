@@ -58,7 +58,7 @@ def load_runtime(
     explicit = config_file is not None or bool(os.environ.get("STOCK_ANALYSER_CONFIG"))
     path = config_file or Path(os.environ.get("STOCK_ANALYSER_CONFIG", default_config_file()))
     try:
-        raw = tomllib.loads(path.read_text()) if path.exists() else {}
+        raw = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         if explicit and not path.is_file():
             raise ConfigurationError("The requested configuration file does not exist.")
         settings = Settings.model_validate(raw)
