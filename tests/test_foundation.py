@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from stock_analyser.cli import app
@@ -31,10 +32,12 @@ def isolated_config(monkeypatch, tmp_path):
 
 def test_help_is_available_without_config_or_credentials(monkeypatch):
     monkeypatch.setenv("STOCK_ANALYSER_CONFIG", "/does/not/exist")
+    monkeypatch.setenv("FORCE_COLOR", "1")
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "--config" in result.output
-    assert "doctor" in result.output
+    help_text = Text.from_ansi(result.output).plain
+    assert "--config" in help_text
+    assert "doctor" in help_text
 
 
 def test_menu_and_unavailable_workflow(tmp_path):
@@ -194,7 +197,9 @@ def test_redaction_handles_unknown_credentials_with_escaped_quotes():
 
 def test_utf8_configuration_loads_under_ascii_locale(tmp_path):
     config = tmp_path / "config.toml"
-    config.write_bytes('[paths]\nreports_dir = "café"\n'.encode())
+    # Exercise UTF-8 decoding without requiring an ASCII filesystem encoding
+    # to represent a Unicode path (which fails during path resolution on Linux).
+    config.write_bytes('# café\n[paths]\nreports_dir = "reports"\n'.encode())
     env = {key: value for key, value in os.environ.items() if not key.startswith("STOCK_ANALYSER_")}
     env.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
     result = subprocess.run(
@@ -212,9 +217,16 @@ def test_utf8_configuration_loads_under_ascii_locale(tmp_path):
         capture_output=True,
         text=True,
         encoding="ascii",
-        check=True,
+        check=False,
     )
-    assert json.loads(result.stdout) == str(tmp_path / "café")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == str(tmp_path / "reports")
+
+
+def test_utf8_configuration_preserves_unicode_paths(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('[paths]\nreports_dir = "café"\n', encoding="utf-8")
+    assert load_runtime(config).reports_dir == tmp_path / "café"
 
 
 def test_example_configuration_is_valid():
