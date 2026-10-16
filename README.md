@@ -56,6 +56,12 @@ uv run --locked stock-analyser --config config.example.toml doctor
 
 Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Provider calls, database rules, reports, and trading decisions are outside US-001.
 
+## Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests targeting `main`, pushes to `main`, and merge-queue checks. The `Tests (Python 3.12)` check installs locked dependencies on Ubuntu, runs the test suite, checks lint and formatting, and launches CLI help. It needs no provider credentials. Actions and uv versions are pinned; superseded runs are cancelled automatically.
+
+To enforce this before merging, `main` branch protection must require the `Tests (Python 3.12)` status check with the branch up to date. Keep that required check name aligned with the workflow job name when editing CI.
+
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md): CLI workflows, agents, deterministic technical analysis, market/provider contracts, database, portfolio recording, report artifacts, validation and implementation phases.
