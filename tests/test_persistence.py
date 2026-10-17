@@ -6,6 +6,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -57,8 +58,6 @@ def test_migration_idempotency_and_schema(database):
         )
         assert compare_metadata(MigrationContext.configure(connection), s.metadata) == []
     cfg = Config()
-    from pathlib import Path
-
     from stock_analyser.persistence import database as module
 
     cfg.set_main_option("script_location", str(Path(module.__file__).parent / "migrations"))
@@ -866,3 +865,122 @@ def test_blocked_report_destination_does_not_prevent_collection(database, tmp_pa
     assert retry.exit_code == 0, retry.output
     assert "Report saved" in retry.output
     assert len(list(blocker.rglob("report.md"))) == 1
+
+
+@pytest.mark.parametrize(
+    "scenario", ["complete", "http-error", "empty", "short", "quality-error", "long-cooldown"]
+)
+def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, monkeypatch, scenario):
+    from contextlib import contextmanager
+    from urllib.parse import unquote, urlsplit
+
+    from pydantic import SecretStr
+
+    from stock_analyser import live, massive
+    from stock_analyser.calendars import ExchangeCalendarAdapter
+    from stock_analyser.live import collect_smoke
+    from stock_analyser.markets import US_MARKET
+    from stock_analyser.massive import (
+        HttpResponse,
+        MassiveClient,
+        MassiveSettings,
+        ProviderAllowance,
+    )
+    from stock_analyser.reports import ReportService
+
+    database.initialize()
+    now = [1000.0]
+    settings = MassiveSettings()
+    calls = []
+
+    def transport(target, key, timeout):
+        calls.append(target)
+        if scenario == "http-error":
+            return HttpResponse(403, {}, b'{"error":"private-live-key"}')
+        if scenario == "long-cooldown":
+            return HttpResponse(429, {"Retry-After": "300"}, b"{}")
+        path = urlsplit(target).path
+        if path.startswith("/v2/aggs/"):
+            symbol = unquote(path.split("/")[4])
+            start, end = map(date.fromisoformat, path.split("/")[-2:])
+            sessions = ExchangeCalendarAdapter().schedule(US_MARKET, "XNAS", start, end)
+            if scenario == "empty":
+                sessions = ()
+            elif scenario == "short":
+                sessions = sessions[:-1]
+            payload = {
+                "status": "OK",
+                "ticker": symbol,
+                "adjusted": True,
+                "results": [
+                    {
+                        "t": int((s.opens_at - timedelta(hours=9, minutes=30)).timestamp() * 1000),
+                        "o": 10,
+                        "h": 12,
+                        "l": 9,
+                        "c": 11,
+                        "v": 1.25,
+                    }
+                    for s in sessions
+                ],
+                "ignored": "private-live-key",
+            }
+            if scenario == "quality-error":
+                for field in ("o", "h", "l", "c"):
+                    payload["results"][-1][field] *= 10
+        else:
+            payload = {"status": "OK", "results": []}
+        return HttpResponse(200, {}, json.dumps(payload).encode())
+
+    with ProviderAllowance(
+        tmp_path / "provider.lock",
+        5,
+        clock=lambda: now[0],
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+    ) as allowance:
+        client = MassiveClient(SecretStr("private-live-key"), allowance, settings, transport)
+
+        @contextmanager
+        def controlled_client(*args):
+            yield client
+
+        monkeypatch.setattr(massive, "live_client", controlled_client)
+        monkeypatch.setattr(
+            live,
+            "collect_smoke",
+            lambda *args: collect_smoke(*args, requested=datetime(2026, 10, 17, tzinfo=UTC)),
+        )
+        monkeypatch.setenv("MASSIVE_API_KEY", "private-live-key")
+        monkeypatch.setenv(
+            "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+        )
+        command = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-massive"])
+        assert command.exit_code == (0 if scenario == "complete" else 1), command.output
+        results = json.loads(command.stdout)["reports"]
+    if scenario == "long-cooldown":
+        assert len(calls) == 1
+        assert float((tmp_path / "provider.lock").read_text()) == now[0] + 300
+        assert [r["symbol"] for r in results] == ["AAPL"]
+        assert results[0]["collection_stopped"] is True
+    else:
+        assert [r["symbol"] for r in results] == ["AAPL", "SPY"]
+    assert all(r["history_complete"] == (scenario == "complete") for r in results)
+    assert len({r["smoke_group"] for r in results}) == 1
+    for result in results:
+        service = ReportService(database, tmp_path / "reports")
+        text = service.show(UUID(result["run_id"]), "report.json")
+        data = json.loads(text)
+        assert data["report"]["availability"] == (
+            "UNAVAILABLE" if scenario in ("http-error", "empty", "long-cooldown") else "PARTIAL"
+        )
+        assert "private-live-key" not in text
+        assert data["report"]["stages"]["verdict"] == "NOT_RUN"
+        if scenario not in ("http-error", "long-cooldown"):
+            assert len(data["packets"]) == 2
+            for packet in data["packets"]:
+                assert "PUBLICATION_UNVERIFIED" in packet["metadata"]["quality_flags"]
+                raw = json.loads(Path(packet["raw_reference"]).read_bytes())
+                assert raw["corporate_actions"]["actions"] == []
+                assert len(raw["capability_observations"]) == 3
+        service.generate(UUID(result["run_id"]))
+        assert service.show(UUID(result["run_id"]), "report.json") == text

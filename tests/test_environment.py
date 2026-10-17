@@ -64,3 +64,34 @@ def test_dotenv_decoding_failure_does_not_expose_values():
     Path(".env").write_bytes(b"STOCK_ANALYSER_DATABASE_URL=private-secret\xff")
     with pytest.raises(ConfigurationError, match="Cannot read .env"):
         load_environment()
+
+
+def test_existing_massive_local_key_is_private_and_shell_wins(monkeypatch):
+    from stock_analyser.config import load_massive_key
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    Path(".env.local").write_text("MASSIVE_API_KEY=local-private-key\n")
+    key = load_massive_key()
+    assert key.get_secret_value() == "local-private-key"
+    assert "local-private-key" not in repr(key)
+    monkeypatch.setenv("MASSIVE_API_KEY", "shell-private-key")
+    assert load_massive_key().get_secret_value() == "shell-private-key"
+    result = CliRunner().invoke(app, ["doctor"])
+    assert "shell-private-key" not in result.output
+    assert "local-private-key" not in result.output
+
+
+def test_massive_allowance_configuration_and_invalid_secrets(monkeypatch):
+    from stock_analyser.config import load_massive_key
+
+    Path("config.toml").write_text("[massive]\nrequests_per_minute=3\nmax_requests=20\n")
+    runtime = load_runtime(Path("config.toml"))
+    assert runtime.massive.requests_per_minute == 3
+    assert runtime.massive.max_requests == 20
+    monkeypatch.setenv("MASSIVE_API_KEY", "invalid secret")
+    with pytest.raises(ConfigurationError) as error:
+        load_massive_key()
+    assert "invalid secret" not in str(error.value)
+    Path("config.toml").write_text("[massive]\nrequests_per_minute=0\n")
+    with pytest.raises(ConfigurationError):
+        load_runtime(Path("config.toml"))

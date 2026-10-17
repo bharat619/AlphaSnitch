@@ -6,7 +6,7 @@ Local Python CLI foundation for AlphaSnitch, plus architecture and provider-eval
 
 Version 1 Pydantic contracts live in `stock_analyser.contracts`. Securities and listings have immutable UUID identities; provider symbols use half-open effective-date intervals. Instrument lookup requires a market and rejects ambiguous listings unless a venue is supplied. Frozen contracts use tuples for nested collections and reject unknown fields and unsupported schema versions.
 
-`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. The calendar adapter resolves these references using maintained, locked calendar data as described below. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. Live HTTP adapters and price-provider selection belong to later stories.
+`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. The calendar adapter resolves these references using maintained, locked calendar data as described below. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. The Massive live adapter is described below; price-provider selection belongs to a later story.
 
 Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Every price source declares inclusive local session dates within its effective symbol mapping, allowing a snapshot to retain separate sources before and after a ticker rename. Any returned bars require provenance, including partial results, and price-history validation checks that sources cover every bar's session.
 
@@ -92,7 +92,7 @@ uv run --locked stock-analyser --help
 uv run --locked stock-analyser
 ```
 
-`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. The CLI automatically loads `.env` from the current working directory. Evaluation results and `.env.local` are not required or loaded by the application.
+`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. The CLI automatically loads `.env` from the current working directory. Evaluation results are not required. Live Massive collection can reuse the key in `.env.local`.
 
 The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Reports lists recent runs and shows the commands to reopen or regenerate a report. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
 
@@ -112,7 +112,7 @@ uv run --locked stock-analyser init
 uv run stock-analyser collect-fixture --scenario valid
 ```
 
-Compose and the CLI both read the repository-root `.env` when run from that directory, so subsequent commands need no exports. `.env` is gitignored; `.env.example` is a credential-free local-development template. Use the password already configured in your database if it exists. Shell environment variables override `.env` values. The CLI loads only `.env` in the current working directory, without searching parent directories or loading `.env.local`.
+Compose and the CLI both read the repository-root `.env` when run from that directory, so subsequent commands need no exports. `.env` is gitignored; `.env.example` is a credential-free local-development template. Use the password already configured in your database if it exists. Shell environment variables override `.env` values. General configuration loads only the current-directory `.env`, without searching parent directories. Live Massive collection additionally supports a `.env.local` key fallback.
 
 Compose publishes PostgreSQL on localhost only. If port 5432 is occupied, put `STOCK_ANALYSER_POSTGRES_PORT=55432` in `.env` and use port 55432 in the URL. The password variable is required by Compose. The application reads `STOCK_ANALYSER_DATABASE_URL` from `.env` or the shell; credentials do not belong in TOML. `doctor` reports whether a URL is configured without exposing it or connecting to the database. Both `postgresql://` and `postgresql+psycopg://` URLs use psycopg.
 
@@ -369,3 +369,39 @@ analysis survives, regenerate in a separate process with provider fetching disab
 reopen the structured report after restart, and check repeated regeneration and
 tamper recovery. They also cover total provider failure and interruption after a
 completed daily history but before weekly history returns.
+
+### Massive live evidence (US-007)
+
+Run `stock-analyser collect-massive` to opt in to a small live AAPL and SPY
+benchmark collection. Set `STOCK_ANALYSER_DATABASE_URL` and your existing
+`MASSIVE_API_KEY` in the shell or `.env`. The key also falls back to the current
+directory's `.env.local`, matching the earlier evaluation; unrelated settings
+from that file are not loaded. No key is accepted as a CLI argument.
+
+The command collects three daily and two weekly bars for each listing, plus
+splits and dividends, then saves the usual Markdown/JSON reports. The two
+one-instrument reports share a smoke group and request instant. These are
+explicit smoke listings, not reference-data discovery or strategy execution.
+Use `report show <run-id>` and `report regenerate <run-id>` offline afterward.
+
+Configure `[massive]` in TOML using `config.example.toml`. The default is five
+requests per minute with a shared 100-attempt budget and two retries per request.
+The twelve unpaginated requests take about 2.5 minutes; pagination and retries
+can take longer. No live stress testing or provider fallback occurs. Every
+attempt is paced, including pages and retries. Retry-After seconds and HTTP dates
+are respected. Excessive delays are persisted before stopping all remaining
+collection requests; restarting cannot bypass the saved deadline. The CLI holds a fixed
+per-user `massive.lock` for the complete run, independently of `--data-dir`.
+Competing runs fail immediately. Cooldowns persist across process restarts.
+This controls cooperating local processes; it cannot coordinate another machine
+or unrelated applications using the same credential.
+
+Fresh readiness remains blocked with `PUBLICATION_UNVERIFIED`, even when every
+requested bar is present. A valid saved smoke report can therefore show
+collection `FAILED` and data `PARTIAL`. Exit zero requires both reports and
+complete, valid histories per listing. Only `PUBLICATION_UNVERIFIED` is ignored
+for the command exit status; empty/short histories, other quality errors and
+provider failures exit one.
+The adapter records transport observations, not subscription or billing claims.
+See [Massive evidence policy](docs/massive-evidence.md) for retained fields,
+normalization, and the publication-timing evidence still needed.

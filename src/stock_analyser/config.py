@@ -5,11 +5,12 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from platformdirs import user_config_path, user_data_path
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from stock_analyser.markets import MarketRegistry
+from stock_analyser.massive import MassiveSettings
 
 
 class PathSettings(BaseModel):
@@ -27,6 +28,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     market: Literal["US"] = "US"
+    massive: MassiveSettings = MassiveSettings()
     paths: PathSettings = PathSettings()
 
 
@@ -36,6 +38,7 @@ class ConfigurationError(ValueError):
 
 class Runtime(BaseModel):
     market: Literal["US"]
+    massive: MassiveSettings = MassiveSettings()
     database_url: SecretStr | None = Field(default=None, exclude=True, repr=False)
     config_file: Path | None
     data_dir: Path
@@ -104,8 +107,22 @@ def load_runtime(
         values[key] = resolve(Path(override)) if override else root / name
     return Runtime(
         market="US",
+        massive=settings.massive,
         database_url=os.environ.get("STOCK_ANALYSER_DATABASE_URL") or None,
         config_file=path.resolve() if path.exists() else None,
         data_dir=root,
         **values,
     )
+
+
+def load_massive_key() -> SecretStr:
+    """Reuse the evaluation's .env.local key without loading unrelated settings."""
+    key = os.environ.get("MASSIVE_API_KEY", "")
+    if not key:
+        try:
+            key = dotenv_values(Path.cwd() / ".env.local", interpolate=False).get("MASSIVE_API_KEY")
+        except (OSError, UnicodeError):
+            raise ConfigurationError("Cannot read the local Massive credential file.") from None
+    if not key or any(c.isspace() for c in key):
+        raise ConfigurationError("Set a valid MASSIVE_API_KEY before live collection.")
+    return SecretStr(key)

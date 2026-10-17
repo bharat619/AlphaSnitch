@@ -1,7 +1,7 @@
 # Copy to your user configuration directory, or pass --config /path/to/config.toml.
 # All paths are optional. Relative paths resolve beside this configuration file.
-# No credentials belong in this file. Live integrations will use environment
-# variables / the AWS SDK credential chain when those workflows are implemented.
+# No credentials belong in this file. Massive uses MASSIVE_API_KEY from the
+# environment, .env, or the existing .env.local key.
 # PostgreSQL connection credentials belong in .env or shell environment variables:
 # STOCK_ANALYSER_DATABASE_URL='postgresql+psycopg://user:password@127.0.0.1:5432/database'
 market = "US"
@@ -13,3 +13,13 @@ market = "US"
 # cache_dir = "/absolute/path/to/cache"
 # reports_dir = "/absolute/path/to/reports"
 # logs_dir = "/absolute/path/to/logs"
+
+# Shared across prices, benchmarks, corporate actions, pages, workers, and retries.
+# Set this to your actual provider allowance; HTTP success does not verify a plan.
+[massive]
+requests_per_minute = 5
+timeout_seconds = 20
+retries = 2
+max_requests = 100
+max_retry_delay_seconds = 120
+page_size = 50000
