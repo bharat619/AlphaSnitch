@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -18,12 +18,13 @@ from sqlalchemy.engine import make_url
 from typer.testing import CliRunner
 
 from stock_analyser.cli import app
-from stock_analyser.contracts import OperationalStatus, Security
+from stock_analyser.contracts import OperationalStatus, Security, SymbolMapping
 from stock_analyser.persistence import Database
 from stock_analyser.persistence import schema as s
 from stock_analyser.persistence.database import WRITE_LOCK, postgres_url
 from stock_analyser.persistence.demo import create_fixture_run
 from stock_analyser.persistence.records import ArtifactRecord, RunRecord, SnapshotReference
+from stock_analyser.persistence.repositories import instrument_revision
 
 
 @pytest.fixture
@@ -50,7 +51,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0001"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0002"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -260,3 +261,178 @@ def test_concurrent_empty_database_initialization(database):
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
+
+
+def test_instrument_rename_preserves_versions_and_historical_snapshots(database):
+    database.initialize()
+    run_id = create_fixture_run(database)
+    with database.read() as repo:
+        run = repo.get_run(run_id)
+        old = repo.get_instrument(run.request.instrument_ids[0])
+        snapshot = repo.list_snapshots(run_id)[0]
+    boundary = date(2026, 10, 16)
+    renamed = old.model_copy(
+        update={
+            "symbol": "RENAMED",
+            "provider_symbols": (
+                old.provider_symbols[0].model_copy(update={"effective_to": boundary}),
+                SymbolMapping(
+                    provider=old.provider_symbols[0].provider,
+                    symbol="RENAMED.US",
+                    effective_from=boundary,
+                ),
+            ),
+        }
+    )
+    with database.write() as repo:
+        revision = repo.put_instrument(renamed)
+        assert repo.put_instrument(renamed) == revision
+        assert repo.get_instrument(old.instrument_id) == renamed
+        assert repo.get_instrument(old.instrument_id, instrument_revision(old)) == old
+        assert repo.resolve_instrument("US", "RENAMED") == renamed
+        with pytest.raises(ValueError, match="unknown"):
+            repo.resolve_instrument("US", "ACME")
+        assert len(repo.list_instrument_versions(old.instrument_id)) == 2
+        assert renamed.provider_symbol("fixture-us", boundary) == "RENAMED.US"
+        assert renamed.provider_symbol("fixture-us", date(2026, 10, 15)) == "ACME.US"
+        # Previously collected evidence remains reusable after the current listing changes.
+        replay = run.model_copy(update={"run_id": uuid4()})
+        repo.create_run(replay)
+        repo.attach_snapshot(replay.run_id, snapshot)
+    with database.read() as repo:
+        assert repo.list_snapshots(run_id) == (snapshot,)
+        assert repo.list_snapshots(replay.run_id) == (snapshot,)
+    for field, value in (
+        ("security_id", uuid4()),
+        ("market_id", "TEST"),
+        ("venue", "XNYS"),
+        ("series", "preferred"),
+    ):
+        with pytest.raises(ValueError, match="identity"):
+            with database.write() as repo:
+                repo.put_instrument(renamed.model_copy(update={field: value}))
+    unregistered = old.model_copy(update={"symbol": "UNKNOWN"})
+    with pytest.raises(ValueError, match="not registered"):
+        with database.write() as repo:
+            repo.attach_snapshot(
+                run_id,
+                snapshot.model_copy(
+                    update={
+                        "metadata": snapshot.metadata.model_copy(
+                            update={"instrument": unregistered}
+                        ),
+                    }
+                ),
+            )
+
+
+def test_invalid_artifact_copy_cannot_poison_stored_state(database):
+    database.initialize()
+    run_id = create_fixture_run(database)
+    with database.read() as repo:
+        artifacts = repo.list_artifacts(run_id)
+        run = repo.get_run(run_id)
+    invalid = artifacts[0].model_copy(update={"status": "SAVED"})
+    # Catch inside the transaction too: validation must happen before any SQL mutation.
+    with database.write() as repo:
+        with pytest.raises(ValueError, match="hash and timestamp"):
+            repo.put_artifact(invalid)
+    with database.read() as repo:
+        assert repo.list_artifacts(run_id) == artifacts
+        assert repo.get_run(run_id) == run
+    with pytest.raises(ValueError, match="hash and timestamp"):
+        with database.write() as repo:
+            repo.set_run_status(run_id, OperationalStatus.FAILED)
+            repo.put_artifact(invalid)
+    with database.read() as repo:
+        assert repo.list_artifacts(run_id) == artifacts
+        assert repo.get_run(run_id) == run
+
+
+def test_repeated_fixture_collection_has_content_complete_identity(database):
+    from stock_analyser.fixtures import synthetic_markets
+
+    database.initialize()
+    run_id = create_fixture_run(database)
+    _, _, adapters = synthetic_markets()
+    with database.read() as repo:
+        run = repo.get_run(run_id)
+        first = repo.list_snapshots(run_id)[0]
+    adapter = adapters[0]
+    later = run.request.requested_as_of + timedelta(minutes=1)
+    second = adapter.history(
+        first.metadata.instrument, run.market, run.request.history[0], later
+    ).metadata
+    repeated = adapter.history(
+        first.metadata.instrument, run.market, run.request.history[0], later
+    ).metadata
+    assert second.snapshot_id == repeated.snapshot_id
+    assert second.snapshot_id != first.metadata.snapshot_id
+    assert second.sources[0].sha256 == first.metadata.sources[0].sha256
+    assert second.sources[0].retrieved_at != first.metadata.sources[0].retrieved_at
+    with database.write() as repo:
+        repo.attach_snapshot(
+            run_id,
+            SnapshotReference(
+                metadata=second,
+                reference=first.reference,
+                sha256=first.sha256,
+            ),
+        )
+        repo.attach_snapshot(
+            run_id,
+            SnapshotReference(
+                metadata=repeated,
+                reference=first.reference,
+                sha256=first.sha256,
+            ),
+        )
+    with database.read() as repo:
+        snapshots = repo.list_snapshots(run_id)
+        assert len(snapshots) == 2
+        assert first in snapshots
+    with pytest.raises(ValueError, match="immutable"):
+        with database.write() as repo:
+            repo.attach_snapshot(run_id, first.model_copy(update={"reference": "changed"}))
+
+
+def test_instrument_version_migration_backfills_existing_records(database):
+    # Simulate a database created by the existing PR, before revision 0002.
+    from pathlib import Path
+
+    from stock_analyser.fixtures import synthetic_markets
+    from stock_analyser.persistence import database as module
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(module.__file__).parent / "migrations"))
+    _, registry, _ = synthetic_markets()
+    instrument = registry.resolve("US", "ACME")
+    security = Security(security_id=instrument.security_id, name="Existing instrument")
+    with database.engine.begin() as connection:
+        cfg.attributes["connection"] = connection
+        command.upgrade(cfg, "0001")
+        connection.execute(
+            s.securities.insert().values(
+                security_id=security.security_id,
+                payload=security.model_dump(mode="json"),
+            )
+        )
+        connection.execute(
+            s.instruments.insert().values(
+                instrument_id=instrument.instrument_id,
+                security_id=instrument.security_id,
+                market_id=instrument.market_id,
+                venue=instrument.venue,
+                symbol=instrument.symbol,
+                currency=instrument.quote_currency,
+                payload=instrument.model_dump(mode="json"),
+            )
+        )
+    database.initialize()
+    with database.read() as repo:
+        assert repo.get_instrument(instrument.instrument_id) == instrument
+        assert (
+            repo.get_instrument(instrument.instrument_id, instrument_revision(instrument))
+            == instrument
+        )
+        assert repo.list_instrument_versions(instrument.instrument_id) == (instrument,)

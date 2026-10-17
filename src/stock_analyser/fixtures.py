@@ -5,6 +5,7 @@ contain explicit fixture closes; they do not infer exchange schedules from weekd
 """
 
 import hashlib
+import json
 from datetime import UTC, date, datetime
 from itertools import groupby
 from uuid import NAMESPACE_URL, uuid5
@@ -133,7 +134,6 @@ class FixtureAdapter:
         bars = tuple(b for b in self.bars if b.session <= session.date())[
             -requirement.required_bars :
         ]
-        digest = _bars_sha256(bars)
 
         def mapping_for(bar: PriceBar) -> SymbolMapping:
             for mapping in instrument.provider_symbols:
@@ -164,7 +164,7 @@ class FixtureAdapter:
             else DataAvailability.UNAVAILABLE
         )
         metadata = EvidenceMetadata(
-            snapshot_id=fixture_id(f"{instrument.instrument_id}:{session}:{digest}"),
+            snapshot_id=fixture_id("pending-snapshot-identity"),
             instrument=instrument,
             market=market,
             currency=instrument.quote_currency,
@@ -180,6 +180,15 @@ class FixtureAdapter:
             if availability == DataAvailability.AVAILABLE
             else "Insufficient fixture bars",
         )
+        # Retrieval time, configuration, symbol history and requirements are immutable
+        # snapshot content too. Equal bar bytes alone do not identify a collection.
+        payload = json.dumps(
+            metadata.model_dump(mode="json", exclude={"snapshot_id"}),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode()).hexdigest()
+        metadata = metadata.model_copy(update={"snapshot_id": fixture_id(f"snapshot:{digest}")})
         return PriceHistory(metadata=metadata, bars=bars)
 
     def research(

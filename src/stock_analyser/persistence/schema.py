@@ -30,6 +30,15 @@ instruments = sa.Table(
     sa.Column("payload", JSONB, nullable=False),
     sa.Index("ix_instruments_lookup", "market_id", "symbol", "venue"),
 )
+instrument_versions = sa.Table(
+    "instrument_versions",
+    metadata,
+    sa.Column(
+        "instrument_id", sa.Uuid, sa.ForeignKey("instruments.instrument_id"), primary_key=True
+    ),
+    sa.Column("revision", sa.String(64), primary_key=True),
+    sa.Column("payload", JSONB, nullable=False),
+)
 runs = sa.Table(
     "analysis_runs",
     metadata,

@@ -1,5 +1,7 @@
 """Repositories operate only inside Database read/write transaction scopes."""
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -16,6 +18,11 @@ from stock_analyser.persistence.records import (
 )
 
 
+def instrument_revision(instrument: Instrument) -> str:
+    payload = json.dumps(instrument.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 class Repositories:
     def __init__(self, connection):
         self.connection = connection
@@ -27,7 +34,9 @@ class Repositories:
         return model.model_validate(payload)
 
     def _immutable(self, table, keys, record, **columns):
-        payload = record.model_dump(mode="json")
+        payload = (
+            type(record).model_validate(record.model_dump(mode="json")).model_dump(mode="json")
+        )
         self.connection.execute(
             insert(table).values(**keys, **columns, payload=payload).on_conflict_do_nothing()
         )
@@ -41,20 +50,67 @@ class Repositories:
     def get_security(self, security_id: UUID) -> Security:
         return self._get(s.securities, s.securities.c.security_id == security_id, Security)
 
-    def put_instrument(self, instrument: Instrument) -> None:
-        self._immutable(
-            s.instruments,
-            {"instrument_id": instrument.instrument_id},
-            instrument,
+    def put_instrument(self, instrument: Instrument) -> str:
+        instrument = Instrument.model_validate(instrument.model_dump(mode="json"))
+        payload = instrument.model_dump(mode="json")
+        previous = self.connection.scalar(
+            sa.select(s.instruments.c.payload).where(
+                s.instruments.c.instrument_id == instrument.instrument_id,
+            )
+        )
+        # These fields identify a listing; descriptive attributes and symbols may evolve.
+        identity = ("security_id", "market_id", "venue", "series")
+        if previous is not None and any(previous[key] != payload[key] for key in identity):
+            raise ValueError("Instrument identity cannot change")
+        statement = insert(s.instruments).values(
+            instrument_id=instrument.instrument_id,
             security_id=instrument.security_id,
             market_id=instrument.market_id,
             venue=instrument.venue,
             symbol=instrument.symbol,
             currency=instrument.quote_currency,
+            payload=payload,
         )
+        # The instruments row is the current lookup projection; history is append-only.
+        self.connection.execute(
+            statement.on_conflict_do_update(
+                index_elements=["instrument_id"],
+                set_={
+                    "symbol": statement.excluded.symbol,
+                    "currency": statement.excluded.currency,
+                    "payload": statement.excluded.payload,
+                },
+            )
+        )
+        revision = instrument_revision(instrument)
+        self._immutable(
+            s.instrument_versions,
+            {"instrument_id": instrument.instrument_id, "revision": revision},
+            instrument,
+        )
+        return revision
 
-    def get_instrument(self, instrument_id: UUID) -> Instrument:
+    def get_instrument(self, instrument_id: UUID, revision: str | None = None) -> Instrument:
+        if revision is not None:
+            return self._get(
+                s.instrument_versions,
+                sa.and_(
+                    s.instrument_versions.c.instrument_id == instrument_id,
+                    s.instrument_versions.c.revision == revision,
+                ),
+                Instrument,
+            )
         return self._get(s.instruments, s.instruments.c.instrument_id == instrument_id, Instrument)
+
+    def list_instrument_versions(self, instrument_id: UUID) -> tuple[Instrument, ...]:
+        values = self.connection.scalars(
+            sa.select(s.instrument_versions.c.payload)
+            .where(
+                s.instrument_versions.c.instrument_id == instrument_id,
+            )
+            .order_by(s.instrument_versions.c.revision)
+        )
+        return tuple(Instrument.model_validate(value) for value in values)
 
     def resolve_instrument(
         self, market_id: str, symbol: str, venue: str | None = None
@@ -88,6 +144,7 @@ class Repositories:
         )
 
     def create_run(self, run: RunRecord) -> None:
+        run = RunRecord.model_validate(run.model_dump(mode="json"))
         self.put_market(run.market)
         for instrument_id in run.request.instrument_ids:
             run.market.validate_instrument(self.get_instrument(instrument_id))
@@ -122,12 +179,18 @@ class Repositories:
             )
         )
 
-    def _validate_scope(self, run: RunRecord, instrument_id: UUID) -> None:
-        run.market.validate_instrument(self.get_instrument(instrument_id))
+    def _validate_scope(
+        self,
+        run: RunRecord,
+        instrument_id: UUID,
+        instrument: Instrument | None = None,
+    ) -> None:
+        run.market.validate_instrument(instrument or self.get_instrument(instrument_id))
         if run.request.instrument_ids and instrument_id not in run.request.instrument_ids:
             raise ValueError("Instrument is outside requested run scope")
 
     def put_stage(self, stage: StageRecord) -> None:
+        stage = StageRecord.model_validate(stage.model_dump(mode="json"))
         run = self.get_run(stage.run_id)
         if stage.instrument_id is not None:
             self._validate_scope(run, stage.instrument_id)
@@ -160,11 +223,16 @@ class Repositories:
         return tuple(StageRecord.model_validate(value) for value in values)
 
     def attach_snapshot(self, run_id: UUID, snapshot: SnapshotReference) -> None:
+        snapshot = SnapshotReference.model_validate(snapshot.model_dump(mode="json"))
         run = self.get_run(run_id)
         evidence = snapshot.metadata
-        self._validate_scope(run, evidence.instrument.instrument_id)
-        if evidence.instrument != self.get_instrument(evidence.instrument.instrument_id):
-            raise ValueError("Snapshot instrument differs from stored instrument")
+        self._validate_scope(run, evidence.instrument.instrument_id, evidence.instrument)
+        try:
+            self.get_instrument(
+                evidence.instrument.instrument_id, instrument_revision(evidence.instrument)
+            )
+        except LookupError:
+            raise ValueError("Snapshot instrument version is not registered") from None
         if evidence.market != run.market:
             raise ValueError("Snapshot configuration differs from frozen run configuration")
         if evidence.session_cutoff > run.request.requested_as_of:
@@ -200,6 +268,7 @@ class Repositories:
         return tuple(SnapshotReference.model_validate(value) for value in values)
 
     def put_artifact(self, artifact: ArtifactRecord) -> None:
+        artifact = ArtifactRecord.model_validate(artifact.model_dump(mode="json"))
         self.get_run(artifact.run_id)
         existing = (
             self.connection.execute(
