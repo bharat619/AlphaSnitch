@@ -1,0 +1,12 @@
+---
+description: Require feature branches and pull requests for every change
+alwaysApply: true
+---
+
+Follow the repository workflow in `AGENTS.md`.
+
+- Never push directly to `main`; all changes must go through a pull request.
+- "Commit and push" means push a feature branch and open a PR targeting `main`.
+- Verify the branch and explicit destination before pushing. For example:
+  `git push -u origin feat/my-change`.
+- Never interpret a generic push request as permission to push to `main`.
