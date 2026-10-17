@@ -2,6 +2,8 @@
 # All paths are optional. Relative paths resolve beside this configuration file.
 # No credentials belong in this file. Live integrations will use environment
 # variables / the AWS SDK credential chain when those workflows are implemented.
+# PostgreSQL connection credentials are environment-only:
+# export STOCK_ANALYSER_DATABASE_URL='postgresql+psycopg://user:password@127.0.0.1:5432/database'
 market = "US"
 
 [paths]

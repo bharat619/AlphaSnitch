@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: stock_analyser
+      POSTGRES_PASSWORD: ${STOCK_ANALYSER_POSTGRES_PASSWORD:?Set STOCK_ANALYSER_POSTGRES_PASSWORD}
+      POSTGRES_DB: stock_analyser
+    ports:
+      - "127.0.0.1:${STOCK_ANALYSER_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_analyser -d stock_analyser"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+volumes:
+  postgres_data:

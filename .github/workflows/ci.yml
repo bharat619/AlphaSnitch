@@ -20,6 +20,22 @@ jobs:
     name: Tests (Python 3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: stock_analyser
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_DB: stock_analyser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stock_analyser -d stock_analyser"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      STOCK_ANALYSER_TEST_DATABASE_URL: postgresql+psycopg://stock_analyser:ci-test-password@127.0.0.1:5432/stock_analyser
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

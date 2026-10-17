@@ -83,6 +83,7 @@ def test_runtime_path_precedence_and_init(tmp_path, monkeypatch):
     runtime.initialize()
     for name in ("database", "snapshots", "cache", "reports", "logs"):
         assert getattr(runtime, f"{name}_dir").is_dir()
+    monkeypatch.setattr("stock_analyser.cli.initialize_database", lambda runtime: None)
     result = runner.invoke(app, ["--config", str(config), "init"])
     assert result.exit_code == 0
 
@@ -253,3 +254,37 @@ def test_startup_without_system_timezone_data(arguments):
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_database_url_is_secret_and_doctor_does_not_connect(monkeypatch):
+    secret = "postgresql+psycopg://user:db-private-password@127.0.0.1:1/absent"
+    monkeypatch.setenv("STOCK_ANALYSER_DATABASE_URL", secret)
+    runtime = load_runtime()
+    assert secret not in repr(runtime)
+    assert "database_url" not in runtime.model_dump(mode="json")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["database_configured"] is True
+    assert "db-private-password" not in result.output
+    assert "postgresql" not in result.output
+    assert "db-private-password" not in redact(f"Failed connection: {secret}", {})
+
+
+def test_init_requires_database_url(tmp_path):
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "init"])
+    assert result.exit_code == 1
+    assert "Set STOCK_ANALYSER_DATABASE_URL" in result.output
+
+
+def test_init_database_errors_do_not_expose_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("STOCK_ANALYSER_DATABASE_URL", "postgresql://user:db-password@host/db")
+
+    def broken(self):
+        raise RuntimeError("postgresql://user:db-password@host/db sensitive-query-payload")
+
+    monkeypatch.setattr("stock_analyser.persistence.Database.initialize", broken)
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "init"])
+    assert result.exit_code == 1
+    assert "PostgreSQL initialization failed" in result.output
+    assert "db-password" not in result.output
+    assert "sensitive-query-payload" not in result.output
