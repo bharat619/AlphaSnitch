@@ -6,6 +6,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -57,8 +58,6 @@ def test_migration_idempotency_and_schema(database):
         )
         assert compare_metadata(MigrationContext.configure(connection), s.metadata) == []
     cfg = Config()
-    from pathlib import Path
-
     from stock_analyser.persistence import database as module
 
     cfg.set_main_option("script_location", str(Path(module.__file__).parent / "migrations"))
@@ -866,3 +865,93 @@ def test_blocked_report_destination_does_not_prevent_collection(database, tmp_pa
     assert retry.exit_code == 0, retry.output
     assert "Report saved" in retry.output
     assert len(list(blocker.rglob("report.md"))) == 1
+
+
+@pytest.mark.parametrize("provider_failure", [False, True])
+def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, provider_failure):
+    from urllib.parse import unquote, urlsplit
+
+    from pydantic import SecretStr
+
+    from stock_analyser.calendars import ExchangeCalendarAdapter
+    from stock_analyser.config import Runtime
+    from stock_analyser.live import collect_smoke
+    from stock_analyser.markets import US_MARKET
+    from stock_analyser.massive import (
+        HttpResponse,
+        MassiveClient,
+        MassiveSettings,
+        ProviderAllowance,
+    )
+    from stock_analyser.reports import ReportService
+
+    database.initialize()
+    now = [1000.0]
+    settings = MassiveSettings()
+    runtime = Runtime(
+        market="US",
+        config_file=None,
+        data_dir=tmp_path,
+        **{
+            f"{name}_dir": tmp_path / name
+            for name in ("database", "snapshots", "cache", "reports", "logs")
+        },
+    )
+
+    def transport(target, key, timeout):
+        if provider_failure:
+            return HttpResponse(403, {}, b'{"error":"private-live-key"}')
+        path = urlsplit(target).path
+        if path.startswith("/v2/aggs/"):
+            symbol = unquote(path.split("/")[4])
+            start, end = map(date.fromisoformat, path.split("/")[-2:])
+            sessions = ExchangeCalendarAdapter().schedule(US_MARKET, "XNAS", start, end)
+            payload = {
+                "status": "OK",
+                "ticker": symbol,
+                "adjusted": True,
+                "results": [
+                    {
+                        "t": int((s.opens_at - timedelta(hours=9, minutes=30)).timestamp() * 1000),
+                        "o": 10,
+                        "h": 12,
+                        "l": 9,
+                        "c": 11,
+                        "v": 1.25,
+                    }
+                    for s in sessions
+                ],
+                "ignored": "private-live-key",
+            }
+        else:
+            payload = {"status": "OK", "results": []}
+        return HttpResponse(200, {}, json.dumps(payload).encode())
+
+    with ProviderAllowance(
+        tmp_path / "provider.lock",
+        5,
+        clock=lambda: now[0],
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+    ) as allowance:
+        client = MassiveClient(SecretStr("private-live-key"), allowance, settings, transport)
+        results = collect_smoke(
+            database, runtime, client, requested=datetime(2026, 10, 17, tzinfo=UTC)
+        )
+    assert [r["symbol"] for r in results] == ["AAPL", "SPY"]
+    assert len({r["smoke_group"] for r in results}) == 1
+    for result in results:
+        service = ReportService(database, runtime.reports_dir)
+        text = service.show(UUID(result["run_id"]), "report.json")
+        data = json.loads(text)
+        assert data["report"]["availability"] == ("UNAVAILABLE" if provider_failure else "PARTIAL")
+        assert "private-live-key" not in text
+        assert data["report"]["stages"]["verdict"] == "NOT_RUN"
+        if not provider_failure:
+            assert len(data["packets"]) == 2
+            for packet in data["packets"]:
+                assert "PUBLICATION_UNVERIFIED" in packet["metadata"]["quality_flags"]
+                raw = json.loads(Path(packet["raw_reference"]).read_bytes())
+                assert raw["corporate_actions"]["actions"] == []
+                assert len(raw["capability_observations"]) == 3
+        service.generate(UUID(result["run_id"]))
+        assert service.show(UUID(result["run_id"]), "report.json") == text

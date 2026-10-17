@@ -40,6 +40,7 @@ class RawPriceResponse(Contract):
     adjustment: Literal["raw", "split", "total_return"]
     feed: FeedCoverage
     payload: bytes
+    quality_flags: tuple[Text, ...] = ()
 
 
 class RawPriceProvider(Protocol):
@@ -99,6 +100,8 @@ def validate_prices(
     def flag(code, row=None, session=None, severity="error"):
         findings.append(QualityFinding(code=code, row=row, session=session, severity=severity))
 
+    for code in response.quality_flags:
+        flag(code)
     expected = {p.session_end: p for p in resolution.periods}
     for reason in resolution.reasons:
         if reason in (

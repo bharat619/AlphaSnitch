@@ -354,3 +354,34 @@ def report_regenerate(ctx: typer.Context, run_id: UUID) -> None:
     finally:
         if database is not None:
             database.close()
+
+
+@app.command("collect-massive")
+def collect_massive(ctx: typer.Context) -> None:
+    """Opt in to bounded live AAPL/SPY daily/weekly collection and saved reports."""
+    from platformdirs import user_data_path
+
+    from stock_analyser.config import load_massive_key
+    from stock_analyser.live import collect_smoke
+    from stock_analyser.massive import live_client
+
+    database = None
+    try:
+        runtime = ctx.obj
+        key = load_massive_key()
+        # Fixed per-user path: changing --data-dir cannot bypass the process lease.
+        lock_path = user_data_path("stock-analyser", appauthor=False) / "massive.lock"
+        with live_client(key, runtime.massive, lock_path) as client:
+            database = report_database(runtime)
+            database.initialize()
+            results = collect_smoke(database, runtime, client)
+        display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
+        if any(r["snapshot_count"] != 2 for r in results):
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database is not None:
+            database.close()
