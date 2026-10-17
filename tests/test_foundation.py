@@ -23,6 +23,7 @@ def isolated_config(monkeypatch, tmp_path):
     # Keep tests independent of the user's optional configuration and runtime state.
     import stock_analyser.config as config
 
+    monkeypatch.setattr(config, "load_environment", lambda: None)
     for name in tuple(os.environ):
         if name.startswith("STOCK_ANALYSER_"):
             monkeypatch.delenv(name)

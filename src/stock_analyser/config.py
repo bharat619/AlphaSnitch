@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from platformdirs import user_config_path, user_data_path
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -53,11 +54,22 @@ def default_config_file() -> Path:
     return user_config_path("stock-analyser", appauthor=False) / "config.toml"
 
 
+def load_environment() -> None:
+    """Load this directory's .env; existing shell variables always win."""
+    try:
+        load_dotenv(Path.cwd() / ".env", override=False, encoding="utf-8")
+    except (OSError, UnicodeError):
+        raise ConfigurationError(
+            "Cannot read .env. Check its permissions and UTF-8 encoding."
+        ) from None
+
+
 def load_runtime(
     config_file: Path | None = None,
     data_dir: Path | None = None,
     market: str | None = None,
 ) -> Runtime:
+    load_environment()
     explicit = config_file is not None or bool(os.environ.get("STOCK_ANALYSER_CONFIG"))
     path = config_file or Path(os.environ.get("STOCK_ANALYSER_CONFIG", default_config_file()))
     try:
