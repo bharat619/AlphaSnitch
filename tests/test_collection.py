@@ -134,3 +134,24 @@ def test_immutable_files_do_not_overwrite_existing_evidence(tmp_path):
         immutable_write(path, b"changed")
     assert path.read_bytes() == b"original"
     assert not list(path.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "field,number",
+    [
+        ("volume", "1.1234567890123456789"),
+        ("open", "10.1234567890123456789"),
+        ("close", "11.1234567890123456789"),
+        ("volume", "1.1234567890123456789e-20"),
+    ],
+)
+def test_numeric_json_preserves_decimal_precision(evidence, field, number):
+    response, resolution = evidence
+    payload = json.loads(response.payload)
+    payload["bars"][0][field] = "NUMERIC_TOKEN"
+    raw = encode(payload).replace(b'"NUMERIC_TOKEN"', number.encode())
+    bars, findings, _ = validate_prices(response.model_copy(update={"payload": raw}), resolution)
+    assert not findings
+    assert getattr(bars[0], field) == Decimal(number)
+    # Persisting the normalized bar must preserve the same exact value too.
+    assert json.loads(bars[0].model_dump_json())[field] == str(Decimal(number))

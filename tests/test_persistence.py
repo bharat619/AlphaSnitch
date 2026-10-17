@@ -569,3 +569,62 @@ def test_collection_freezes_raw_evidence_and_persists_manifest(
     with database.read() as repo:
         assert repo.list_snapshots(run_id) == snapshots
         assert repo.get_run(run_id).status.value == status
+
+
+@pytest.mark.parametrize(
+    "field,code",
+    [
+        ("provider", "PROVIDER_MISMATCH"),
+        ("feed", "FEED_MISMATCH"),
+        ("provider_symbol", "SYMBOL_MISMATCH"),
+    ],
+)
+def test_rejected_provenance_is_frozen_and_linked_to_failed_run(
+    database, tmp_path, monkeypatch, field, code
+):
+    import hashlib
+    from pathlib import Path
+
+    from stock_analyser.fixtures import RawFixtureProvider
+
+    original = RawFixtureProvider.fetch
+    returned = []
+
+    def mislabeled(self, instrument, market, resolution):
+        response = original(self, instrument, market, resolution)
+        value = (
+            response.feed.model_copy(update={"feed_id": "WRONG"}) if field == "feed" else "WRONG"
+        )
+        response = response.model_copy(update={field: value})
+        returned.append(response)
+        return response
+
+    monkeypatch.setattr(RawFixtureProvider, "fetch", mislabeled)
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-fixture"])
+    assert result.exit_code == 1, result.output
+    output = json.loads(result.stdout)
+    run_id = UUID(output["run_id"])
+    with database.read() as repo:
+        assert repo.get_run(run_id).status == OperationalStatus.FAILED
+        assert repo.list_stages(run_id)[0].status == OperationalStatus.FAILED
+        assert repo.list_snapshots(run_id) == ()
+        (artifact,) = repo.list_artifacts(run_id)
+    assert artifact.status == "SAVED"
+    content = Path(artifact.reference).read_bytes()
+    assert hashlib.sha256(content).hexdigest() == artifact.sha256
+    manifest = json.loads(content)
+    assert manifest["status"] == "FAILED"
+    (rejection,) = manifest["rejected_responses"]
+    content = Path(rejection["reference"]).read_bytes()
+    assert hashlib.sha256(content).hexdigest() == rejection["sha256"]
+    diagnostic = json.loads(content)
+    assert diagnostic == rejection["diagnostic"]
+    assert diagnostic["run_id"] == str(run_id)
+    assert diagnostic["response"] == returned[0].model_dump(mode="json", exclude={"payload"})
+    assert {finding["code"] for finding in diagnostic["findings"]} == {code}
+    raw = Path(diagnostic["raw_reference"]).read_bytes()
+    assert raw == returned[0].payload
+    assert hashlib.sha256(raw).hexdigest() == diagnostic["raw_sha256"]

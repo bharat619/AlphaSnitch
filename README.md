@@ -292,7 +292,7 @@ errors. The full history resolution retains market-closed/publication-delay
 context; a closed market alone does not imply stale data. Missing expected bars
 are stale even when an older response has enough total rows.
 
-Volume is stored as decimal strings without rounding to integers. Explicit zero
+Provider JSON numeric fractions are decoded directly as decimals to preserve their exact precision. Volume is stored as decimal strings without rounding to integers. Explicit zero
 volume is retained and flagged `ZERO_VOLUME` as a warning; missing/null volume is
 an error and is never replaced with zero. A current open at or below 60%, or at or
 above 160%, of the previous close triggers a blocking
@@ -306,3 +306,11 @@ failed packet are retained for inspection and must not be treated as usable
 assessment input. The service does not run indicators, setup detection, or agent
 conclusions. Filesystem/provider exceptions propagate without claiming success;
 previously attached snapshots remain available for inspection.
+
+If a response declares the wrong provider, feed, or symbol, its exact raw bytes
+are frozen before provenance validation. A failed diagnostic records the actual
+response labels, retrieval time, raw hash, requested resolution, and mismatch
+findings (`PROVIDER_MISMATCH`, `FEED_MISMATCH`, or `SYMBOL_MISMATCH`). The saved
+run manifest links to this diagnostic by path and hash in `rejected_responses`.
+Rejected responses are kept outside trusted snapshot metadata and cannot satisfy
+mandatory history requirements.

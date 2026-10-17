@@ -111,7 +111,7 @@ def validate_prices(
     if response.retrieved_at < resolution.requested_as_of:
         flag("RETRIEVED_BEFORE_REQUEST")
     try:
-        payload = json.loads(response.payload)
+        payload = json.loads(response.payload, parse_float=Decimal)
         rows = payload["bars"]
         if not isinstance(rows, list):
             raise ValueError
@@ -215,25 +215,59 @@ class CollectionService:
     ) -> tuple[EvidencePacket, ...]:
         run_id = run.run_id
         snapshots = []
+        rejected_responses = []
         for resolution in run.history_resolutions:
             if resolution.venue != instrument.venue:
                 continue
             if not resolution.periods:
                 raise ValueError("Collection requires a resolved history window")
             response = provider.fetch(instrument, run.market, resolution)
-            route = run.market.route("prices")
-            if response.provider != route.provider or response.feed != route.feed:
-                raise ValueError("Provider response differs from configured route")
-            if any(
-                instrument.provider_symbol(response.provider, p.session_end)
-                != response.provider_symbol
-                for p in resolution.periods
-            ):
-                raise ValueError("Response symbol differs from effective instrument mapping")
             snapshot_id = uuid4()
             directory = self.snapshots_dir / str(snapshot_id)
             raw_path = directory / "source.json"
             digest = immutable_write(raw_path, response.payload)
+            route = run.market.route("prices")
+            provenance_findings = []
+            if response.provider != route.provider:
+                provenance_findings.append(QualityFinding(code="PROVIDER_MISMATCH"))
+            if response.feed != route.feed:
+                provenance_findings.append(QualityFinding(code="FEED_MISMATCH"))
+            try:
+                symbols_match = all(
+                    instrument.provider_symbol(route.provider, p.session_end)
+                    == response.provider_symbol
+                    for p in resolution.periods
+                )
+            except ValueError:
+                symbols_match = False
+            if not symbols_match:
+                provenance_findings.append(QualityFinding(code="SYMBOL_MISMATCH"))
+            if provenance_findings:
+                # Invalid provenance cannot satisfy EvidenceMetadata's trusted-source
+                # contract. Retain the actual labels in a separate failed diagnostic.
+                diagnostic = {
+                    "run_id": str(run_id),
+                    "snapshot_id": str(snapshot_id),
+                    "status": OperationalStatus.FAILED.value,
+                    "instrument": instrument.model_dump(mode="json"),
+                    "resolution": resolution.model_dump(mode="json"),
+                    "response": response.model_dump(mode="json", exclude={"payload"}),
+                    "raw_reference": str(raw_path),
+                    "raw_sha256": digest,
+                    "findings": [f.model_dump(mode="json") for f in provenance_findings],
+                    "source_version": run.source_version,
+                    "component_versions": {**run.component_versions, "collection": "1"},
+                }
+                diagnostic_path = directory / "manifest.json"
+                diagnostic_hash = immutable_write(diagnostic_path, encode(diagnostic))
+                rejected_responses.append(
+                    {
+                        "reference": str(diagnostic_path),
+                        "sha256": diagnostic_hash,
+                        "diagnostic": diagnostic,
+                    }
+                )
+                continue
             bars, findings, count = validate_prices(response, resolution)
             errors = any(f.severity == "error" for f in findings)
             availability = (
@@ -307,6 +341,7 @@ class CollectionService:
                 "status": status.value,
                 "reason": reason,
                 "snapshots": [p.model_dump(mode="json") for p in snapshots],
+                "rejected_responses": rejected_responses,
             }
         )
         digest = immutable_write(manifest_path, content)
