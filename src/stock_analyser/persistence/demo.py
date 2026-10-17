@@ -3,16 +3,17 @@
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
+from stock_analyser.calendars import CutoffPolicy, HistoryResolver
 from stock_analyser.contracts import (
     AnalysisRequest,
     HistoryRequirement,
     OperationalStatus,
     Security,
 )
-from stock_analyser.fixtures import synthetic_markets
+from stock_analyser.fixtures import synthetic_markets, synthetic_session_calendars
 from stock_analyser.persistence import Database
 from stock_analyser.persistence.records import (
     ArtifactRecord,
@@ -29,6 +30,11 @@ def create_fixture_run(database: Database) -> UUID:
     instrument = instruments.resolve("US", "ACME")
     cutoff = datetime(2026, 10, 16, 15, tzinfo=UTC)
     history = HistoryRequirement(timeframe="daily", minimum_bars=1)
+    _, calendars = synthetic_session_calendars()
+    resolution = HistoryResolver(
+        calendars[0],
+        CutoffPolicy(earliest_session=date(2026, 10, 5), publication_timing="synthetic"),
+    ).resolve(market, instrument.venue, history, cutoff)
     evidence = adapters[0].history(instrument, market, history, cutoff).metadata
     run = RunRecord(
         run_id=uuid4(),
@@ -45,6 +51,7 @@ def create_fixture_run(database: Database) -> UUID:
         configuration={"fixture": True},
         source_version=source_version(),
         component_versions={"fixture": "1", "provider": "fixture-us"},
+        history_resolutions=(resolution,),
     )
     with database.write() as repo:
         repo.put_security(Security(security_id=instrument.security_id, name="Synthetic ACME"))

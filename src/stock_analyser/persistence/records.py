@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field, model_validator
 
+from stock_analyser.calendars import ResolvedHistory
 from stock_analyser.contracts import (
     AnalysisRequest,
     Contract,
@@ -23,6 +24,7 @@ class RunRecord(Contract):
     configuration: dict[str, object]
     source_version: dict[str, object]
     component_versions: dict[str, str]
+    history_resolutions: tuple[ResolvedHistory, ...] = ()
     status: OperationalStatus = OperationalStatus.NOT_RUN
     created_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -32,6 +34,19 @@ class RunRecord(Contract):
     def consistent_market(self) -> Self:
         if self.request.market_id != self.market.market_id:
             raise ValueError("Request and configuration markets differ")
+        keys = [(r.venue, r.requirement.timeframe) for r in self.history_resolutions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Duplicate history resolutions")
+        for resolution in self.history_resolutions:
+            if (
+                resolution.requested_as_of != self.request.requested_as_of
+                or resolution.market_id != self.market.market_id
+                or resolution.market_configuration_version != self.market.configuration_version
+                or resolution.timezone != self.market.timezone
+                or resolution.calendar not in self.market.calendars
+                or resolution.requirement not in self.request.history
+            ):
+                raise ValueError("History resolution differs from frozen run request/configuration")
         return self
 
 

@@ -1,12 +1,12 @@
 # Stock market analyser
 
-Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
+Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
 ## Market-aware contracts (US-002)
 
 Version 1 Pydantic contracts live in `stock_analyser.contracts`. Securities and listings have immutable UUID identities; provider symbols use half-open effective-date intervals. Instrument lookup requires a market and rejects ambiguous listings unless a venue is supplied. Frozen contracts use tuples for nested collections and reject unknown fields and unsupported schema versions.
 
-`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. Calendar references are adapter contracts, not a bundled exchange schedule. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. Live HTTP adapters and history-selection policy execution belong to later stories.
+`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. The calendar adapter resolves these references using maintained, locked calendar data as described below. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. Live HTTP adapters and price-provider selection belong to later stories.
 
 Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Every price source declares inclusive local session dates within its effective symbol mapping, allowing a snapshot to retain separate sources before and after a ticker rename. Any returned bars require provenance, including partial results, and price-history validation checks that sources cover every bar's session.
 
@@ -37,6 +37,49 @@ PY
 ```
 
 The two `ACME` listings have distinct security and instrument IDs, USD/INR currencies and provider routes. At the same as-of instant, the fixture US calendar resolves October 15 while the second market resolves October 16. The adapters use explicit synthetic closes and fractional-volume bars, require no credentials and make no network calls. Research and corporate-action fixtures intentionally contain empty datasets; the LLM fixture returns a fixed synthetic response.
+
+## Completed sessions and history (US-004)
+
+`stock_analyser.calendars.ExchangeCalendarAdapter` supplies regular US equity sessions from the locked `pandas-market-calendars` dependency. XNYS uses NYSE, XNAS uses NASDAQ, and ARCX uses the NYSE regular equity schedule. Holidays, exceptional closures, early closes and DST offsets come from that maintained data, which is bundled with the installed dependency and requires no runtime network access. Unknown calendar references fail explicitly. Extended-hours trading is excluded. Calendar behavior and schedule APIs are documented by [pandas-market-calendars](https://pandas-market-calendars.readthedocs.io/en/latest/usage.html).
+
+`HistoryResolver.resolve(market, venue, requirement, requested_as_of)` returns a frozen, JSON-serializable `ResolvedHistory`. It stores the requested instant normalized to UTC separately from local session dates, actual close instants and grace-adjusted eligibility instants. It also freezes the market/configuration, calendar reference, installed calendar-data version, complete cutoff policy and original history requirement. `history_start`, `session_date`, and `session_cutoff` expose the resulting provider request window; no completed history produces `None` cutoffs.
+
+Policy `completed-sessions-1` uses exchange-local Monday–Sunday weeks. A weekly bar is eligible only after its final **scheduled** session closes and its own grace period expires; a Friday holiday can make Thursday the final session. Daily and weekly requirements each request `minimum_bars + warmup_bars` independently. Weekly provider labels must normalize to the week's final local session date. The resolver queries through the end of the current week to avoid treating a midweek prefix as a completed week. It expands the history search as needed, bounded by `earliest_session` (default 1990-01-01), and reports insufficient history instead of shortening the requirement. A partial week at that lower bound is excluded conservatively.
+
+Daily and weekly publication grace defaults to 900 seconds each and can be configured separately through `CutoffPolicy`. These defaults are provisional policy, **not measured publication guarantees**. Live-provider timing remains `unverified`, producing `PUBLICATION_UNVERIFIED` until validated in US-007. Synthetic fixtures explicitly use `synthetic`; `observed` is reserved for a policy supported by provider observations.
+
+Resolution reasons distinguish `MARKET_CLOSED` (outside a scheduled session), `PUBLICATION_DELAYED` (a completed period is still inside its grace window), and `INSUFFICIENT_HISTORY`. `assess_history(plan, returned_sessions)` additionally detects `STALE_DATA` when the latest eligible bar or an interior expected bar is missing. Short history from a recent listing has an insufficient-history reason without being marked stale when its latest bars are current. Holiday/weekend closure alone does not make data stale. Reasons can coexist; closed-market and grace states describe context and do not establish provider failure. Older bars do not count toward the resolved requirement. Unexpected labels within or beyond the resolved window, including incomplete weeks, are rejected.
+
+`RunRecord.history_resolutions` persists these plans in the existing PostgreSQL run JSON payload, independently of the original request timestamp. Plans must match the frozen run request and market; attached snapshots must match the plan's venue/timeframe cutoff, adjustment and requested bar count. Existing runs without plans remain readable. The persistence demonstration below records a synthetic daily plan and verifies it across processes.
+
+Run this offline demonstration of the Good Friday boundary and Thanksgiving early close:
+
+```sh
+uv run --locked --no-sync python - <<'PY'
+from datetime import datetime
+from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
+from stock_analyser.contracts import HistoryRequirement
+from stock_analyser.markets import US_MARKET
+
+resolver = HistoryResolver(ExchangeCalendarAdapter())
+for instant in (
+    "2026-04-02T20:14:59+00:00", "2026-04-02T20:15:00+00:00",
+    "2026-11-27T18:14:59+00:00", "2026-11-27T18:15:00+00:00",
+):
+    for timeframe in ("daily", "weekly"):
+        plan = resolver.resolve(
+            US_MARKET, "XNYS",
+            HistoryRequirement(timeframe=timeframe, minimum_bars=1),
+            datetime.fromisoformat(instant),
+        )
+        print(instant, timeframe, plan.session_date,
+              plan.session_cutoff.isoformat(), ",".join(plan.reasons))
+PY
+```
+
+At April 2's grace boundary, the daily cutoff advances from April 1 to April 2 and the weekly cutoff from March 27 to April 2 (Good Friday is closed). At November 27's early-close grace boundary, daily advances from November 25 to November 27 and weekly from November 20 to November 27. The actual November 27 close is 18:00 UTC; eligibility begins at 18:15 UTC.
+
+`fixtures.synthetic_session_calendars()` supplies two enumerated synthetic weeks for US and TEST markets. At `2026-10-16T15:00:00Z`, US resolves daily October 15 and weekly October 9; TEST resolves daily and weekly October 16. Tests exercise both markets without enabling TEST in production configuration or claiming live India calendar support.
 
 ## Install and launch
 
