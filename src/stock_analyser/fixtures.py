@@ -6,6 +6,7 @@ contain explicit fixture closes; they do not infer exchange schedules from weekd
 
 import hashlib
 from datetime import UTC, date, datetime
+from itertools import groupby
 from uuid import NAMESPACE_URL, uuid5
 
 from stock_analyser.contracts import (
@@ -63,6 +64,11 @@ def fixture_market(market_id: str, currency: str, venue: str, timezone: str) -> 
         ),
         strategy_profile="synthetic-1",
     )
+
+
+def _bars_sha256(bars: tuple[PriceBar, ...]) -> str:
+    payload = "[" + ",".join(b.model_dump_json() for b in bars) + "]"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 class FixtureAdapter:
@@ -124,12 +130,32 @@ class FixtureAdapter:
             raise ValueError("Fixture supports split-adjusted daily bars only")
         session = self.latest_completed_session(market, instrument.venue, cutoff)
         route = market.route("prices")
-        symbol = instrument.provider_symbol(route.provider, session.date())
         bars = tuple(b for b in self.bars if b.session <= session.date())[
             -requirement.required_bars :
         ]
-        payload = "[" + ",".join(b.model_dump_json() for b in bars) + "]"
-        digest = hashlib.sha256(payload.encode()).hexdigest()
+        digest = _bars_sha256(bars)
+
+        def mapping_for(bar: PriceBar) -> SymbolMapping:
+            for mapping in instrument.provider_symbols:
+                if mapping.provider == route.provider and mapping.contains(bar.session):
+                    return mapping
+            raise ValueError("No provider symbol mapping for fixture bar session")
+
+        sources = []
+        for mapping, group in groupby(bars, key=mapping_for):
+            covered_bars = tuple(group)
+            source_digest = _bars_sha256(covered_bars)
+            sources.append(
+                SourceRecord(
+                    provider=route.provider,
+                    provider_symbol=mapping.symbol,
+                    retrieved_at=cutoff,
+                    reference=f"fixture://{market.market_id}/{instrument.instrument_id}/{source_digest}",
+                    sha256=source_digest,
+                    session_start=covered_bars[0].session,
+                    session_end=covered_bars[-1].session,
+                )
+            )
         availability = (
             DataAvailability.AVAILABLE
             if len(bars) >= requirement.required_bars
@@ -149,19 +175,7 @@ class FixtureAdapter:
             availability=availability,
             requested_bars=requirement.required_bars,
             returned_bars=len(bars),
-            sources=(
-                SourceRecord(
-                    provider=route.provider,
-                    provider_symbol=symbol,
-                    retrieved_at=cutoff,
-                    reference=f"fixture://{market.market_id}/{instrument.instrument_id}/{digest}",
-                    sha256=digest,
-                    session_start=bars[0].session,
-                    session_end=bars[-1].session,
-                ),
-            )
-            if bars
-            else (),
+            sources=tuple(sources),
             reason=None
             if availability == DataAvailability.AVAILABLE
             else "Insufficient fixture bars",

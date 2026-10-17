@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -21,7 +22,7 @@ from stock_analyser.contracts import (
     StrategyVerdict,
     SymbolMapping,
 )
-from stock_analyser.fixtures import FixtureLLMProvider, synthetic_markets
+from stock_analyser.fixtures import FixtureAdapter, FixtureLLMProvider, synthetic_markets
 from stock_analyser.markets import InstrumentRegistry, MarketRegistry
 from stock_analyser.providers import PriceHistory
 
@@ -482,3 +483,55 @@ def test_price_history_rejects_bars_outside_source_intervals(available_evidence)
     bars = (PriceBar(session=date(2026, 10, 14), open=10, high=12, low=9, close=11, volume=1),)
     with pytest.raises(ValidationError, match="no source provenance"):
         PriceHistory(metadata=available_evidence, bars=bars)
+
+
+@pytest.mark.parametrize("minimum_bars", [1, 2, 3])
+def test_fixture_adapter_splits_sources_at_ticker_rename(available_evidence, minimum_bars):
+    _, _, adapters = synthetic_markets()
+    original = adapters[0]
+    instrument = renamed_history(available_evidence)["instrument"]
+    adapter = FixtureAdapter(original.market, (instrument,), original.closes, original.bars)
+    history = adapter.history(
+        instrument,
+        original.market,
+        HistoryRequirement(timeframe="daily", minimum_bars=minimum_bars),
+        datetime(2026, 10, 16, 21, tzinfo=UTC),
+    )
+    expected_bars = original.bars[-minimum_bars:]
+    assert history.bars == expected_bars
+    assert history.metadata.availability == (
+        DataAvailability.PARTIAL if minimum_bars == 3 else DataAvailability.AVAILABLE
+    )
+    expected_symbols = ["NEW"] if minimum_bars == 1 else ["OLD", "NEW"]
+    assert [source.provider_symbol for source in history.metadata.sources] == expected_symbols
+    for source, bar in zip(history.metadata.sources, expected_bars, strict=True):
+        assert source.session_start == source.session_end == bar.session
+        payload = "[" + bar.model_dump_json() + "]"
+        assert source.sha256 == hashlib.sha256(payload.encode()).hexdigest()
+        assert source.reference.endswith(source.sha256)
+    assert PriceHistory.model_validate_json(history.model_dump_json()) == history
+    assert (
+        adapter.history(
+            instrument,
+            original.market,
+            HistoryRequirement(timeframe="daily", minimum_bars=minimum_bars),
+            datetime(2026, 10, 16, 21, tzinfo=UTC),
+        )
+        == history
+    )
+
+
+def test_fixture_adapter_preserves_single_source_without_rename():
+    markets, listings, adapters = synthetic_markets()
+    history = adapters[0].history(
+        listings.resolve("US", "ACME"),
+        markets.resolve("US"),
+        HistoryRequirement(timeframe="daily", minimum_bars=2),
+        datetime(2026, 10, 16, 21, tzinfo=UTC),
+    )
+    assert len(history.metadata.sources) == 1
+    source = history.metadata.sources[0]
+    assert source.session_start == date(2026, 10, 15)
+    assert source.session_end == date(2026, 10, 16)
+    payload = "[" + ",".join(bar.model_dump_json() for bar in history.bars) + "]"
+    assert source.sha256 == hashlib.sha256(payload.encode()).hexdigest()
