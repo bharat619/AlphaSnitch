@@ -156,8 +156,12 @@ class FixtureAdapter:
                     retrieved_at=cutoff,
                     reference=f"fixture://{market.market_id}/{instrument.instrument_id}/{digest}",
                     sha256=digest,
+                    session_start=bars[0].session,
+                    session_end=bars[-1].session,
                 ),
-            ),
+            )
+            if bars
+            else (),
             reason=None
             if availability == DataAvailability.AVAILABLE
             else "Insufficient fixture bars",

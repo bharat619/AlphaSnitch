@@ -288,3 +288,197 @@ def test_fixture_history_counts_warmup_and_rejects_unsupported_requests():
             "XNAS",
             datetime(2020, 1, 1, tzinfo=UTC),
         )
+
+
+@pytest.fixture
+def available_evidence():
+    markets, listings, adapters = synthetic_markets()
+    listing = listings.resolve("US", "ACME")
+    return (
+        adapters[0]
+        .history(
+            listing,
+            markets.resolve("US"),
+            HistoryRequirement(timeframe="daily", minimum_bars=1),
+            AS_OF,
+        )
+        .metadata
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["missing_instrument", "missing_weekly", "short_history", "missing_warmup", "wrong_adjustment"],
+)
+def test_available_report_requires_complete_request_coverage(available_evidence, case):
+    evidence = available_evidence
+    overrides = {}
+    if case == "missing_instrument":
+        overrides["instrument_ids"] = (evidence.instrument.instrument_id, uuid4())
+    elif case == "missing_weekly":
+        overrides["history"] = (
+            HistoryRequirement(timeframe="daily", minimum_bars=1),
+            HistoryRequirement(timeframe="weekly", minimum_bars=1),
+        )
+    else:
+        overrides["history"] = (
+            HistoryRequirement(
+                timeframe="daily",
+                minimum_bars=280 if case == "short_history" else 1,
+                warmup_bars=1 if case == "missing_warmup" else 0,
+                adjustment="total_return" if case == "wrong_adjustment" else "split",
+            ),
+        )
+    with pytest.raises(ValidationError, match="missing a requested|mandatory history"):
+        DataReadinessReport(
+            run_id=uuid4(),
+            request=request(evidence.instrument, **overrides),
+            availability=DataAvailability.AVAILABLE,
+            evidence=(evidence,),
+        )
+
+
+def test_available_report_with_complete_mandatory_history(available_evidence):
+    daily = available_evidence
+    weekly = EvidenceMetadata.model_validate(
+        daily.model_dump()
+        | {
+            "snapshot_id": uuid4(),
+            "timeframe": "weekly",
+            "adjustment": "total_return",
+            "requested_bars": 3,
+            "returned_bars": 3,
+        }
+    )
+    analysis = request(
+        daily.instrument,
+        history=(
+            HistoryRequirement(timeframe="daily", minimum_bars=1),
+            HistoryRequirement(
+                timeframe="weekly", minimum_bars=1, warmup_bars=2, adjustment="total_return"
+            ),
+        ),
+    )
+    report = DataReadinessReport(
+        run_id=uuid4(),
+        request=analysis,
+        availability=DataAvailability.AVAILABLE,
+        evidence=(daily, weekly),
+    )
+    assert DataReadinessReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_optional_history_can_be_absent_and_sector_scope_must_be_resolved(available_evidence):
+    evidence = available_evidence
+    analysis = request(
+        evidence.instrument,
+        history=(
+            HistoryRequirement(timeframe="daily", minimum_bars=1),
+            HistoryRequirement(timeframe="weekly", minimum_bars=200, mandatory=False),
+        ),
+    )
+    report = DataReadinessReport(
+        run_id=uuid4(),
+        request=analysis,
+        availability=DataAvailability.AVAILABLE,
+        evidence=(evidence,),
+    )
+    sector = request(
+        evidence.instrument, instrument_ids=(), sector="synthetic", history=analysis.history
+    )
+    with pytest.raises(ValidationError, match="resolved instrument IDs"):
+        DataReadinessReport.model_validate(report.model_dump() | {"request": sector})
+    DataReadinessReport.model_validate(
+        report.model_dump()
+        | {
+            "request": sector,
+            "resolved_instrument_ids": (evidence.instrument.instrument_id,),
+        }
+    )
+
+
+@pytest.mark.parametrize("availability", ["AVAILABLE", "PARTIAL"])
+def test_all_returned_bars_require_provenance(available_evidence, availability):
+    with pytest.raises(ValidationError, match="source provenance"):
+        EvidenceMetadata.model_validate(
+            available_evidence.model_dump()
+            | {
+                "availability": availability,
+                "sources": (),
+                "reason": "fixture",
+            }
+        )
+
+
+def renamed_history(evidence):
+    instrument = Instrument.model_validate(
+        evidence.instrument.model_dump()
+        | {
+            "provider_symbols": (
+                SymbolMapping(
+                    provider="fixture-us",
+                    symbol="OLD",
+                    effective_from=date(2020, 1, 1),
+                    effective_to=date(2026, 10, 16),
+                ),
+                SymbolMapping(
+                    provider="fixture-us", symbol="NEW", effective_from=date(2026, 10, 16)
+                ),
+            ),
+        }
+    )
+    source = evidence.sources[0].model_dump()
+    return evidence.model_dump() | {
+        "instrument": instrument,
+        "session_cutoff": datetime(2026, 10, 16, 20, tzinfo=UTC),
+        "requested_bars": 2,
+        "returned_bars": 2,
+        "sources": (
+            source
+            | {
+                "provider_symbol": "OLD",
+                "session_start": date(2026, 10, 15),
+                "session_end": date(2026, 10, 15),
+            },
+            source
+            | {
+                "provider_symbol": "NEW",
+                "session_start": date(2026, 10, 16),
+                "session_end": date(2026, 10, 16),
+            },
+        ),
+    }
+
+
+def test_price_provenance_can_span_a_ticker_rename(available_evidence):
+    evidence = EvidenceMetadata.model_validate(renamed_history(available_evidence))
+    bars = tuple(
+        PriceBar(session=date(2026, 10, day), open=10, high=12, low=9, close=11, volume="1.5")
+        for day in (15, 16)
+    )
+    history = PriceHistory(metadata=evidence, bars=bars)
+    assert PriceHistory.model_validate_json(history.model_dump_json()) == history
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"session_start": None, "session_end": None},
+        {"session_start": None},
+        {"session_start": date(2026, 10, 16)},  # Reversed interval.
+        {"session_end": date(2026, 10, 16)},  # OLD cannot include the rename date.
+        {"provider_symbol": "NEW"},  # NEW cannot describe an OLD session.
+        {"session_end": date(2026, 10, 17)},  # Beyond the snapshot cutoff.
+    ],
+)
+def test_source_intervals_must_match_effective_symbol_mapping(available_evidence, overrides):
+    values = renamed_history(available_evidence)
+    values["sources"] = (values["sources"][0] | overrides, values["sources"][1])
+    with pytest.raises(ValidationError):
+        EvidenceMetadata.model_validate(values)
+
+
+def test_price_history_rejects_bars_outside_source_intervals(available_evidence):
+    bars = (PriceBar(session=date(2026, 10, 14), open=10, high=12, low=9, close=11, volume=1),)
+    with pytest.raises(ValidationError, match="no source provenance"):
+        PriceHistory(metadata=available_evidence, bars=bars)

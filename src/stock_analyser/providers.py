@@ -1,10 +1,10 @@
 """Provider boundaries. Implementations must return normalized versioned contracts."""
 
 from datetime import date
-from typing import Protocol
+from typing import Protocol, Self
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime
+from pydantic import AwareDatetime, model_validator
 
 from stock_analyser.contracts import (
     Contract,
@@ -22,7 +22,8 @@ class PriceHistory(Contract):
     metadata: EvidenceMetadata
     bars: tuple[PriceBar, ...]
 
-    def model_post_init(self, context: object) -> None:
+    @model_validator(mode="after")
+    def consistent_bars(self) -> Self:
         if len(self.bars) != self.metadata.returned_bars:
             raise ValueError("Returned bar count does not match metadata")
         sessions = [b.session for b in self.bars]
@@ -33,6 +34,15 @@ class PriceHistory(Contract):
         ).date()
         if any(s > cutoff_date for s in sessions):
             raise ValueError("Bar session exceeds cutoff")
+        if any(
+            not any(
+                source.session_start <= session <= source.session_end
+                for source in self.metadata.sources
+            )
+            for session in sessions
+        ):
+            raise ValueError("Bar session has no source provenance")
+        return self
 
 
 class ResearchItem(Contract):

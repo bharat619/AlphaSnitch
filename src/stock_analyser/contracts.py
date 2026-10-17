@@ -235,6 +235,17 @@ class SourceRecord(Contract):
     retrieved_at: AwareDatetime
     reference: Text
     sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    # Inclusive local session dates; required for price evidence, optional for news/actions.
+    session_start: date | None = None
+    session_end: date | None = None
+
+    @model_validator(mode="after")
+    def valid_sessions(self) -> Self:
+        if (self.session_start is None) != (self.session_end is None):
+            raise ValueError("Source session interval requires both endpoints")
+        if self.session_start is not None and self.session_end < self.session_start:
+            raise ValueError("Source session interval is reversed")
+        return self
 
 
 class EvidenceMetadata(Contract):
@@ -269,8 +280,20 @@ class EvidenceMetadata(Contract):
         for source in self.sources:
             if source.provider not in providers:
                 raise ValueError("Evidence source does not match configured price provider")
-            if source.provider_symbol != self.instrument.provider_symbol(source.provider, session):
+            if source.session_start is None or source.session_end is None:
+                raise ValueError("Price source requires a covered session interval")
+            if source.session_end > session:
+                raise ValueError("Source session interval exceeds evidence cutoff")
+            if not any(
+                mapping.provider == source.provider
+                and mapping.symbol == source.provider_symbol
+                and mapping.contains(source.session_start)
+                and mapping.contains(source.session_end)
+                for mapping in self.instrument.provider_symbols
+            ):
                 raise ValueError("Evidence source symbol does not match effective provider mapping")
+        if self.returned_bars > 0 and not self.sources:
+            raise ValueError("Returned bars require source provenance")
         if self.availability == DataAvailability.AVAILABLE and (
             self.returned_bars < self.requested_bars or not self.sources
         ):
@@ -293,6 +316,34 @@ class ReportArtifact(Contract):
     created_at: AwareDatetime
 
 
+def validate_request_coverage(
+    request: AnalysisRequest,
+    evidence: tuple[EvidenceMetadata, ...],
+    resolved_instrument_ids: tuple[UUID, ...],
+) -> None:
+    """Require every resolved listing's mandatory history before claiming AVAILABLE.
+
+    Counts belong to a single evidence snapshot; overlapping snapshots cannot be
+    added together to manufacture sufficient history.
+    """
+    instrument_ids = request.instrument_ids or resolved_instrument_ids
+    if not instrument_ids:
+        raise ValueError("Available sector report requires resolved instrument IDs")
+    for instrument_id in instrument_ids:
+        if not any(e.instrument.instrument_id == instrument_id for e in evidence):
+            raise ValueError("Available report is missing a requested instrument")
+        for requirement in request.history:
+            if requirement.mandatory and not any(
+                e.instrument.instrument_id == instrument_id
+                and e.timeframe == requirement.timeframe
+                and e.adjustment == requirement.adjustment
+                and e.availability == DataAvailability.AVAILABLE
+                and e.returned_bars >= requirement.required_bars
+                for e in evidence
+            ):
+                raise ValueError("Available report does not satisfy mandatory history requirements")
+
+
 class DataReadinessReport(Contract):
     run_id: UUID
     request: AnalysisRequest
@@ -300,17 +351,22 @@ class DataReadinessReport(Contract):
     availability: DataAvailability = DataAvailability.NOT_REQUESTED
     stages: StrategyStages = Field(default_factory=StrategyStages)
     evidence: tuple[EvidenceMetadata, ...] = ()
+    resolved_instrument_ids: tuple[UUID, ...] = ()
     artifacts: tuple[ReportArtifact, ...] = ()
     reason: Text | None = None
 
     @model_validator(mode="after")
     def consistent_scope(self) -> Self:
+        if len(set(self.resolved_instrument_ids)) != len(self.resolved_instrument_ids):
+            raise ValueError("Duplicate resolved instrument IDs")
+        if self.request.instrument_ids and self.resolved_instrument_ids:
+            if set(self.resolved_instrument_ids) != set(self.request.instrument_ids):
+                raise ValueError("Resolved instruments differ from requested instruments")
+        scope = self.request.instrument_ids or self.resolved_instrument_ids
         for evidence in self.evidence:
             if evidence.market.market_id != self.request.market_id:
                 raise ValueError("Report evidence belongs to another market")
-            if self.request.instrument_ids and (
-                evidence.instrument.instrument_id not in self.request.instrument_ids
-            ):
+            if scope and evidence.instrument.instrument_id not in scope:
                 raise ValueError("Report evidence is outside requested instruments")
             if evidence.session_cutoff > self.request.requested_as_of:
                 raise ValueError("Evidence cutoff is after requested as-of time")
@@ -319,6 +375,8 @@ class DataReadinessReport(Contract):
             or any(e.availability != DataAvailability.AVAILABLE for e in self.evidence)
         ):
             raise ValueError("Available report requires available evidence")
+        if self.availability == DataAvailability.AVAILABLE:
+            validate_request_coverage(self.request, self.evidence, self.resolved_instrument_ids)
         if any(a.run_id != self.run_id for a in self.artifacts):
             raise ValueError("Artifact belongs to another run")
         return self

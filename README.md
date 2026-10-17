@@ -8,7 +8,11 @@ Version 1 Pydantic contracts live in `stock_analyser.contracts`. Securities and 
 
 `MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. Calendar references are adapter contracts, not a bundled exchange schedule. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. Live HTTP adapters and history-selection policy execution belong to later stories.
 
-Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Data-readiness reports separate operational status, data availability and strategy verdict. Indicators, setups, debate and verdict remain `NOT_RUN`, including when data collection succeeds.
+Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Every price source declares inclusive local session dates within its effective symbol mapping, allowing a snapshot to retain separate sources before and after a ticker rename. Any returned bars require provenance, including partial results, and price-history validation checks that sources cover every bar's session.
+
+An `AVAILABLE` report must cover each requested instrument and mandatory timeframe with the requested adjustment and minimum-plus-warmup bar count in a single available snapshot. Sector reports must provide `resolved_instrument_ids` before claiming availability. Optional history may be omitted. Data-readiness reports separate operational status, data availability and strategy verdict. Indicators, setups, debate and verdict remain `NOT_RUN`, including when data collection succeeds.
+
+The locked `tzdata` dependency supplies IANA timezone data when the operating system has none. Startup regression tests disable system timezone lookup with `PYTHONTZPATH=''`.
 
 Run this offline demonstration after installation (`TEST` is synthetic and cannot be selected through CLI flags, environment or TOML):
 
