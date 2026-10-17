@@ -383,7 +383,6 @@ def test_excessive_retry_delay_stops_shared_allowance_and_survives_restart(
     )
     with pytest.raises(ProviderCooldownError):
         client.request("/stock")
-    assert float(client.allowance.path.read_text()) == 1312
     other = MassiveClient(
         SecretStr("secret-do-not-retain"), client.allowance, client.settings, client.transport
     )
@@ -391,6 +390,9 @@ def test_excessive_retry_delay_stops_shared_allowance_and_survives_restart(
         other.request("/benchmark")
     assert len(calls) == 1 and clock.sleeps == [12]
     client.allowance.__exit__()
+    # Windows byte locks also deny reads through a second handle. Verify the
+    # persisted deadline after releasing the lease, before testing a restart.
+    assert float(client.allowance.path.read_text()) == 1312
     with ProviderAllowance(client.allowance.path, 5, clock=clock.time, sleep=clock.sleep) as lease:
         restarted = MassiveClient(
             SecretStr("secret-do-not-retain"), lease, client.settings, client.transport
