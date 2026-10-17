@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "alembic>=1.16,<2",
+  "pandas-market-calendars>=5.1,<6",
   "platformdirs>=4.3,<5",
   "psycopg[binary]>=3.2,<4",
   "pydantic>=2.10,<3",

@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime
 from itertools import groupby
 from uuid import NAMESPACE_URL, uuid5
 
+from stock_analyser.calendars import CalendarSession, calendar_reference
 from stock_analyser.contracts import (
     BenchmarkMapping,
     CalendarReference,
@@ -259,3 +260,44 @@ def synthetic_markets() -> tuple[MarketRegistry, InstrumentRegistry, tuple[Fixtu
         for m, i, hour, minute in zip(contexts, instruments, (20, 10), (0, 0), strict=True)
     )
     return MarketRegistry(contexts), InstrumentRegistry(instruments), adapters
+
+
+class FixtureSessionCalendar:
+    """Explicit synthetic schedule: omitted dates are closed, not inferred weekdays."""
+
+    def __init__(self, market: MarketContext, sessions: tuple[CalendarSession, ...]) -> None:
+        self.market = market
+        self.sessions = sessions
+
+    def data_version(self, market: MarketContext, venue: str) -> str:
+        calendar_reference(market, venue)
+        if market != self.market:
+            raise ValueError("Fixture calendar belongs to another market context")
+        return "synthetic-session-calendar-1"
+
+    def schedule(
+        self, market: MarketContext, venue: str, start: date, end: date
+    ) -> tuple[CalendarSession, ...]:
+        self.data_version(market, venue)
+        return tuple(s for s in self.sessions if start <= s.session <= end)
+
+
+def synthetic_session_calendars() -> tuple[MarketRegistry, tuple[FixtureSessionCalendar, ...]]:
+    markets, _, adapters = synthetic_markets()
+    # Two fully enumerated synthetic weeks; neither fixture asserts a live schedule.
+    dates = tuple(date(2026, 10, day) for day in (5, 6, 7, 8, 9, 12, 13, 14, 15, 16))
+    calendars = tuple(
+        FixtureSessionCalendar(
+            adapter.market,
+            tuple(
+                CalendarSession(
+                    session=day,
+                    opens_at=datetime(2026, 10, day.day, opening, tzinfo=UTC),
+                    closes_at=datetime(2026, 10, day.day, closing, tzinfo=UTC),
+                )
+                for day in dates
+            ),
+        )
+        for adapter, opening, closing in zip(adapters, (14, 4), (20, 10), strict=True)
+    )
+    return markets, calendars

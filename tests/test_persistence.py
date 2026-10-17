@@ -91,6 +91,11 @@ def test_restart_in_separate_processes(database):
     assert data["run"]["source_version"]["package_version"] == "0.1.0"
     assert data["run"]["component_versions"]["provider"] == "fixture-us"
     assert data["run"]["market"]["configuration_version"] == "synthetic-1"
+    resolution = data["run"]["history_resolutions"][0]
+    assert resolution["requested_as_of"] == "2026-10-16T15:00:00Z"
+    assert resolution["periods"][-1]["session_end"] == "2026-10-15"
+    assert resolution["periods"][-1]["closes_at"] == "2026-10-15T20:00:00Z"
+    assert resolution["policy"]["policy_version"] == "completed-sessions-1"
     assert data["run"]["status"] == "SUCCEEDED"
     assert {x["name"]: x["status"] for x in data["stages"]} == {
         "collection": "SUCCEEDED",
@@ -101,6 +106,22 @@ def test_restart_in_separate_processes(database):
     }
     assert data["snapshots"][0]["metadata"]["sources"][0]["sha256"]
     assert all(a["status"] == "PENDING" for a in data["artifacts"])
+
+
+def test_snapshot_must_match_frozen_history_resolution(database):
+    database.initialize()
+    run_id = create_fixture_run(database)
+    with database.read() as repo:
+        snapshot = repo.list_snapshots(run_id)[0]
+    metadata = snapshot.metadata.model_dump() | {
+        "snapshot_id": uuid4(),
+        "session_cutoff": snapshot.metadata.session_cutoff + timedelta(hours=1),
+    }
+    changed = SnapshotReference.model_validate(snapshot.model_dump() | {"metadata": metadata})
+    with pytest.raises(ValueError, match="frozen history resolution"), database.write() as repo:
+        repo.attach_snapshot(run_id, changed)
+    with database.read() as repo:
+        assert repo.list_snapshots(run_id) == (snapshot,)
 
 
 def test_immutable_records_and_rollback(database):

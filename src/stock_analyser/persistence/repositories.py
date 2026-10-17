@@ -237,6 +237,23 @@ class Repositories:
             raise ValueError("Snapshot configuration differs from frozen run configuration")
         if evidence.session_cutoff > run.request.requested_as_of:
             raise ValueError("Snapshot cutoff exceeds requested cutoff")
+        if run.history_resolutions:
+            resolution = next(
+                (
+                    r
+                    for r in run.history_resolutions
+                    if r.venue == evidence.instrument.venue
+                    and r.requirement.timeframe == evidence.timeframe
+                ),
+                None,
+            )
+            if (
+                resolution is None
+                or evidence.session_cutoff != resolution.session_cutoff
+                or evidence.requested_bars != resolution.requirement.required_bars
+                or evidence.adjustment != resolution.requirement.adjustment
+            ):
+                raise ValueError("Snapshot differs from frozen history resolution")
         self._immutable(
             s.snapshots,
             {"snapshot_id": evidence.snapshot_id},
