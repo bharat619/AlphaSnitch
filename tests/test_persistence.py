@@ -436,3 +436,33 @@ def test_instrument_version_migration_backfills_existing_records(database):
             == instrument
         )
         assert repo.list_instrument_versions(instrument.instrument_id) == (instrument,)
+
+
+def test_currency_change_is_rejected_without_breaking_historical_run_operations(database):
+    database.initialize()
+    run_id = create_fixture_run(database)
+    with database.read() as repo:
+        run = repo.get_run(run_id)
+        instrument = repo.get_instrument(run.request.instrument_ids[0])
+        snapshots = repo.list_snapshots(run_id)
+        stages = repo.list_stages(run_id)
+        versions = repo.list_instrument_versions(instrument.instrument_id)
+    changed = instrument.model_copy(update={"quote_currency": "EUR"})
+    with database.write() as repo:
+        # Catching rejection inside the transaction must not leave a changed current
+        # projection or an extra version when the transaction subsequently commits.
+        with pytest.raises(ValueError, match="identity"):
+            repo.put_instrument(changed)
+    with database.read() as repo:
+        assert repo.get_instrument(instrument.instrument_id) == instrument
+        assert repo.list_instrument_versions(instrument.instrument_id) == versions
+        assert repo.list_snapshots(run_id) == snapshots
+        assert repo.list_stages(run_id) == stages
+    stage = stages[0].model_copy(update={"status": OperationalStatus.RUNNING})
+    with database.write() as repo:
+        repo.create_run(run)
+        repo.put_stage(stage)
+    with database.read() as repo:
+        assert repo.get_run(run_id) == run
+        assert stage in repo.list_stages(run_id)
+        assert repo.list_snapshots(run_id) == snapshots

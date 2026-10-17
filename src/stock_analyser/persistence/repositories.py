@@ -58,8 +58,9 @@ class Repositories:
                 s.instruments.c.instrument_id == instrument.instrument_id,
             )
         )
-        # These fields identify a listing; descriptive attributes and symbols may evolve.
-        identity = ("security_id", "market_id", "venue", "series")
+        # Currency must remain fixed until runs bind their own instrument revisions.
+        # Symbols and provider mappings may evolve without changing historical run scope.
+        identity = ("security_id", "market_id", "venue", "series", "quote_currency")
         if previous is not None and any(previous[key] != payload[key] for key in identity):
             raise ValueError("Instrument identity cannot change")
         statement = insert(s.instruments).values(
@@ -77,7 +78,6 @@ class Repositories:
                 index_elements=["instrument_id"],
                 set_={
                     "symbol": statement.excluded.symbol,
-                    "currency": statement.excluded.currency,
                     "payload": statement.excluded.payload,
                 },
             )
