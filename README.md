@@ -1,6 +1,6 @@
 # Stock market analyser
 
-Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issue [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) adds installation, configuration, the command menu, and setup diagnostics. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
+Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
 ## Market-aware contracts (US-002)
 
@@ -49,11 +49,73 @@ uv run --locked stock-analyser --help
 uv run --locked stock-analyser
 ```
 
-`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and setup commands needs no provider credentials or network. Evaluation results and `.env.local` are not required or loaded by the application.
+`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. Evaluation results and `.env.local` are not required or loaded by the application.
 
 The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
 
 For an installation without development tools, use `uv sync --locked --no-dev`. After syncing, the entry point is also available as `.venv/bin/stock-analyser` (Windows: `.venv\Scripts\stock-analyser.exe`), or after activating the environment as `stock-analyser`.
+
+## PostgreSQL setup (US-003)
+
+Application state uses **PostgreSQL 18**, SQLAlchemy, Alembic, and psycopg. This implements the PostgreSQL choice in place of the issue's original SQLite/WAL requirement. Trade ledger tables, LangGraph checkpoints, evidence-file writing, and report generation remain for their implementing stories.
+
+Install and start Docker with Compose support, then run these commands from the repository root. The example password uses URL-safe characters; when choosing another password, percent-encode reserved characters in the connection URL.
+
+```sh
+export STOCK_ANALYSER_POSTGRES_PASSWORD='local-development-only'
+docker compose up -d --wait
+export STOCK_ANALYSER_DATABASE_URL="postgresql+psycopg://stock_analyser:${STOCK_ANALYSER_POSTGRES_PASSWORD}@127.0.0.1:5432/stock_analyser"
+uv run --locked stock-analyser init
+```
+
+Compose publishes PostgreSQL on localhost only. If port 5432 is occupied, set `STOCK_ANALYSER_POSTGRES_PORT=55432` before starting Compose and use port 55432 in the URL. The password variable is required by Compose. The application reads only `STOCK_ANALYSER_DATABASE_URL`; it does not automatically load credentials from `.env.local` or TOML. `doctor` reports whether a URL is configured without exposing it or connecting to the database. Both `postgresql://` and `postgresql+psycopg://` URLs use psycopg.
+
+`init` creates local runtime directories, applies packaged Alembic migrations to the selected database, and seeds the versioned US market configuration. The database itself must already exist; Compose creates it on first startup. Repeating `init` preserves existing records and does not duplicate market configuration. Migrations and seed data share one transaction. Initialization errors roll back database changes; directories may already have been created.
+
+```sh
+docker compose ps
+docker compose logs --tail 50 postgres
+docker compose stop
+# Resume the same database and named volume:
+docker compose up -d --wait
+# Remove the container and network, retaining database files:
+docker compose down
+```
+
+The named `postgres_data` volume is mounted at `/var/lib/postgresql`, as required by the [PostgreSQL 18 image layout](https://hub.docker.com/_/postgres). It survives container restarts and `docker compose down`. `docker compose down -v` deletes the database volume and all its records. Changing `POSTGRES_PASSWORD` does not change an existing volume's database password; use the original credentials or change the database role password explicitly. Keep the same Compose project name/directory when reopening an existing volume.
+
+Back up the database before upgrading an existing installation, then run `uv sync --locked` and `stock-analyser init` to apply migrations. For example, with the Compose server running:
+
+```sh
+docker compose exec -T postgres pg_dump -U stock_analyser -d stock_analyser -Fc > /absolute/path/to/stock-analyser.dump
+```
+
+The `database/` runtime directory is retained for compatibility with existing path settings; PostgreSQL stores its data in the Docker volume, independently of `--data-dir`. Snapshots and report files remain under their configured local directories.
+
+### Persistence and restart demonstration
+
+Run these as separate commands/processes after initialization:
+
+```sh
+uv run --locked python -m stock_analyser.persistence.demo create
+# Copy the printed UUID into the next command, including after restarting PostgreSQL:
+uv run --locked python -m stock_analyser.persistence.demo show <run-uuid>
+```
+
+The synthetic run retains its requested cutoff, complete versioned market configuration, effective configuration, source version, component versions, collection stage, snapshot reference and source hashes. Collection succeeds while indicators, setups, debate and verdict remain `NOT_RUN`. All three report artifact records remain `PENDING`; the demonstration creates no report or evidence files and makes no provider calls. Synthetic data uses the separate `synthetic-1` market configuration and never changes the production US profile.
+
+`stock_analyser.persistence.Database` exposes short `write()` and `read()` repository scopes. Write transactions take a database-scoped PostgreSQL advisory lock shared across application processes. Provider calls and filesystem operations belong outside write scopes. Repositories preserve immutable security/instrument identities, effective-dated provider mappings, market configuration versions and snapshot references. Reusing an immutable key with different content fails; changing configuration requires a new version. Runs retain frozen requests/provenance while operational status and per-instrument stage state can be updated. Artifact failures and retries update artifact records independently of run status.
+
+### PostgreSQL integration tests
+
+The test account needs `CREATEDB`. The Compose account has this permission; ordinary application accounts only need schema migration and application table access. Each integration test creates a randomly named temporary database and drops only that database afterward. Tests never initialize or modify the database named in the test URL.
+
+```sh
+export STOCK_ANALYSER_TEST_DATABASE_URL="$STOCK_ANALYSER_DATABASE_URL"
+uv run --locked pytest -q
+```
+
+Without `STOCK_ANALYSER_TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped and offline tests still run. CI always supplies a PostgreSQL service and runs the integration tests. Checks cover empty/repeated initialization, schema parity, downgrade/upgrade, transaction rollback, immutable records, market/cutoff validation, independent artifact failure/retry, cross-connection write coordination, and process restart recovery. No private evaluation results or provider credentials are used.
 
 ## Local configuration and runtime files
 
@@ -63,7 +125,7 @@ uv run --locked stock-analyser --config config.example.toml doctor
 uv run --locked stock-analyser --data-dir /absolute/path/to/runtime init
 ```
 
-`doctor` prints resolved directories, package version, Git commit and dirty state when available, and a SHA-256 fingerprint of the effective runtime configuration. It makes no provider calls or writes. `init` creates directories only; database migrations and business rules belong to later stories. The menu and help do not create runtime files.
+`doctor` prints resolved directories, package version, Git commit and dirty state when available, and a SHA-256 fingerprint of the effective runtime configuration. It makes no provider calls or writes. `init` also migrates and seeds the PostgreSQL database; configure and start it as described above. The menu and help do not create runtime files.
 
 Copy [config.example.toml](config.example.toml) to the user configuration location shown by `platformdirs`, or pass `--config /path/to/config.toml`. Defaults are outside the source checkout:
 
@@ -71,9 +133,9 @@ Copy [config.example.toml](config.example.toml) to the user configuration locati
 - Linux: configuration at `~/.config/stock-analyser/config.toml`; runtime data at `~/.local/share/stock-analyser/` (respects XDG directory settings).
 - Windows: configuration and runtime data under `%LOCALAPPDATA%\stock-analyser\`.
 
-The data directory contains `database/`, `snapshots/`, `cache/`, `reports/`, and `logs/`. These are reserved runtime locations; this story logs only to stderr. Each directory can be overridden independently. Relative configured paths resolve beside the configuration file; relative CLI/environment overrides use that same base (the default user configuration directory when no file is supplied). Prefer absolute paths for overrides.
+The data directory contains `database/`, `snapshots/`, `cache/`, `reports/`, and `logs/`. These are reserved runtime locations; this story logs only to stderr. Each directory can be overridden independently; `database/` does not control the PostgreSQL data location. Relative configured paths resolve beside the configuration file; relative CLI/environment overrides use that same base (the default user configuration directory when no file is supplied). Prefer absolute paths for overrides.
 
-Configuration precedence is CLI options → environment variables → TOML → defaults. Supported variables are `STOCK_ANALYSER_CONFIG`, `STOCK_ANALYSER_MARKET`, `STOCK_ANALYSER_DATA_DIR`, `STOCK_ANALYSER_DATABASE_DIR`, `STOCK_ANALYSER_SNAPSHOTS_DIR`, `STOCK_ANALYSER_CACHE_DIR`, `STOCK_ANALYSER_REPORTS_DIR`, and `STOCK_ANALYSER_LOGS_DIR`. Explicit child-directory overrides take precedence over the data-directory default. A missing explicitly requested configuration file, malformed TOML, unknown settings, or unsupported market fails clearly. Only `US` is enabled.
+Configuration precedence is CLI options → environment variables → TOML → defaults. Supported variables are `STOCK_ANALYSER_CONFIG`, `STOCK_ANALYSER_MARKET`, `STOCK_ANALYSER_DATA_DIR`, `STOCK_ANALYSER_DATABASE_DIR`, `STOCK_ANALYSER_SNAPSHOTS_DIR`, `STOCK_ANALYSER_CACHE_DIR`, `STOCK_ANALYSER_REPORTS_DIR`, `STOCK_ANALYSER_LOGS_DIR`, and the environment-only `STOCK_ANALYSER_DATABASE_URL`. Explicit child-directory overrides take precedence over the data-directory default. A missing explicitly requested configuration file, malformed TOML, unknown settings, or unsupported market fails clearly. Only `US` is enabled.
 
 Keep provider credentials in environment variables or a local secrets mechanism; AWS integration will use the SDK credential chain. Credentials do not belong in TOML. The example contains no secrets. Terminal errors and the application's logging formatter redact known credential environment values, API-key/token/password assignments, and bearer tokens. Configuration validation never echoes invalid input values. Optional credentials are not validated or required for these offline commands.
 
@@ -90,11 +152,11 @@ printf '1\n6\n' | uv run --locked stock-analyser
 uv run --locked stock-analyser --config config.example.toml doctor
 ```
 
-Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Provider calls, database rules, reports, and trading decisions are outside US-001.
+Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Provider calls, report generation, and trading decisions remain outside these foundation stories; PostgreSQL repository checks are described above.
 
 ## Continuous integration
 
-[GitHub Actions](.github/workflows/ci.yml) runs on pull requests targeting `main`, pushes to `main`, and merge-queue checks. The `Tests (Python 3.12)` check installs locked dependencies on Ubuntu, runs the test suite, checks lint and formatting, and launches CLI help. It needs no provider credentials. Actions and uv versions are pinned; superseded runs are cancelled automatically.
+[GitHub Actions](.github/workflows/ci.yml) runs on pull requests targeting `main`, pushes to `main`, and merge-queue checks. The `Tests (Python 3.12)` check installs locked dependencies on Ubuntu, runs the test suite, checks lint and formatting, and launches CLI help. It starts PostgreSQL 18 and runs disposable-database integration tests as well as offline checks. It needs no provider credentials. Actions and uv versions are pinned; superseded runs are cancelled automatically.
 
 To enforce this before merging, `main` branch protection must require the `Tests (Python 3.12)` status check with the branch up to date. Keep that required check name aligned with the workflow job name when editing CI.
 

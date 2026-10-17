@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from platformdirs import user_config_path, user_data_path
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from stock_analyser.markets import MarketRegistry
 
@@ -35,6 +35,7 @@ class ConfigurationError(ValueError):
 
 class Runtime(BaseModel):
     market: Literal["US"]
+    database_url: SecretStr | None = Field(default=None, exclude=True, repr=False)
     config_file: Path | None
     data_dir: Path
     database_dir: Path
@@ -91,6 +92,7 @@ def load_runtime(
         values[key] = resolve(Path(override)) if override else root / name
     return Runtime(
         market="US",
+        database_url=os.environ.get("STOCK_ANALYSER_DATABASE_URL") or None,
         config_file=path.resolve() if path.exists() else None,
         data_dir=root,
         **values,

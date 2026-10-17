@@ -17,6 +17,9 @@ _BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
 
 
 def redact(message: str, environ: Mapping[str, str] | None = None) -> str:
+    message = re.sub(
+        r"postgres(?:ql)?(?:\+psycopg)?://[^\s\"\']+", "[REDACTED_DATABASE_URL]", message
+    )
     values = environ if environ is not None else os.environ
     secrets = {value for key, value in values.items() if value and _SECRET_NAME.search(key)}
     # Logs can contain already serialized JSON or Python representations. Match

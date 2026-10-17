@@ -1,4 +1,4 @@
-"""Menu and setup commands for the first implementation story."""
+"""Menu, diagnostics, and PostgreSQL initialization commands."""
 
 import hashlib
 import json
@@ -11,7 +11,8 @@ import typer
 from rich.console import Console
 from rich.prompt import Prompt
 
-from stock_analyser.config import Runtime, load_runtime
+from stock_analyser.config import ConfigurationError, Runtime, load_runtime
+from stock_analyser.persistence import Database
 from stock_analyser.security import configure_logging, redact, redact_values, safe_error
 from stock_analyser.version import source_version
 
@@ -105,6 +106,7 @@ def doctor(ctx: typer.Context) -> None:
                     "source": source_version(),
                     "workflows": "unavailable — not implemented",
                     "offline_ready": True,
+                    "database_configured": runtime.database_url is not None,
                 }
             ),
             indent=2,
@@ -116,12 +118,28 @@ def doctor(ctx: typer.Context) -> None:
 
 @app.command("init")
 def initialize(ctx: typer.Context) -> None:
-    """Create runtime directories; no database or provider calls yet."""
+    """Create runtime directories and migrate/seed the configured PostgreSQL database."""
     try:
         ctx.obj.initialize()
+        initialize_database(ctx.obj)
     except Exception as exc:
         fail(exc)
-    display("Runtime directories are ready. Use doctor to inspect the paths.")
+    display("Runtime directories and PostgreSQL schema are ready.")
+
+
+def initialize_database(runtime: Runtime) -> None:
+    if runtime.database_url is None:
+        raise ConfigurationError("Set STOCK_ANALYSER_DATABASE_URL before running init.")
+    database = Database(runtime.database_url.get_secret_value())
+    try:
+        database.initialize()
+    except Exception:
+        # Database exceptions may contain credentials, SQL payloads, or connection details.
+        raise ConfigurationError(
+            "PostgreSQL initialization failed. Check the connection, server, and migration version."
+        ) from None
+    finally:
+        database.close()
 
 
 def main() -> None:
