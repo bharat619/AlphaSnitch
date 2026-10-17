@@ -1,6 +1,7 @@
 """Controlled provider failures exercise production boundaries without live quota."""
 
 import json
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -404,3 +405,28 @@ def test_excessive_retry_delay_stops_shared_allowance_and_survives_restart(
         )
         restarted.request("/benchmark")
     assert len(calls) == 2 and calls[-1][1] >= 1312
+
+
+def test_windows_lock_uses_first_byte_and_nonblocking_mode(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from stock_analyser import massive
+
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "msvcrt",
+        SimpleNamespace(
+            LK_NBLCK=2,
+            locking=lambda fd, mode, size: calls.append(
+                (fd, mode, size, os.lseek(fd, 0, os.SEEK_CUR))
+            ),
+        ),
+    )
+    monkeypatch.setattr(massive.sys, "platform", "win32")
+    path = tmp_path / "provider.lock"
+    path.write_text("existing pacing state")
+    with path.open("a+", encoding="ascii") as stream:
+        stream.seek(0, 2)
+        massive._lock_file(stream)
+        assert calls == [(stream.fileno(), 2, 1, 0)]

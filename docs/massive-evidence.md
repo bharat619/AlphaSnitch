@@ -17,8 +17,11 @@ and `ReportService`; it does not duplicate persistence or reporting logic.
 The allowance is injected and must be shared by every worker/client in a run.
 The CLI does this for stocks, benchmarks, actions, pages and retries. Embedded
 callers must hold the same process lease throughout collection. The file is never
-unlinked, and its next permissible request time is flushed to disk before a
-request. A new process waits at least one configured interval before starting.
+unlinked. The nonblocking lease uses `msvcrt.locking` on Windows and `fcntl.flock`
+on POSIX, with platform APIs imported only when live collection acquires a
+lease. Closing the file releases the OS lock. The first byte is always locked
+on Windows, independently of the stored deadline length. Its next permissible
+request time is flushed to disk before a request. A new process waits at least one configured interval before starting.
 The request budget includes failed attempts. Retry-After deadlines are persisted
 even when they exceed the configured wait limit. That condition stops the shared
 allowance and the remaining smoke listings after saving the failed run/report.

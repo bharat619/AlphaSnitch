@@ -4,11 +4,11 @@ No provider URLs, headers, error bodies, or opaque cursors are retained. Inject 
 transport and clock for deterministic failure tests without spending live quota.
 """
 
-import fcntl
 import http.client
 import json
 import math
 import os
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -18,7 +18,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TextIO
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -91,10 +91,25 @@ def https_transport(target: str, key: SecretStr, timeout: float) -> HttpResponse
         connection.close()
 
 
+def _lock_file(stream: TextIO) -> None:
+    """Acquire a nonblocking OS lease without importing platform APIs at startup."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        # Lock the same byte even when pacing state already exists. Windows
+        # permits a region beyond EOF, so an empty new file needs no sentinel.
+        stream.seek(0)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 class ProviderAllowance:
     """Exclusive process lease plus thread-safe pacing, including across restarts.
 
-    The lock file is never unlinked: replacing an inode defeats flock exclusion.
+    The lock file is never unlinked: replacing the file defeats OS lock exclusion.
     Every client/worker in a run must share this allowance. A single fixed path is
     used by the CLI regardless of its report/data directory.
     """
@@ -112,7 +127,7 @@ class ProviderAllowance:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         stream = self.path.open("a+", encoding="ascii")
         try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_file(stream)
         except OSError:
             stream.close()
             raise MassiveError("Another local Massive collection holds the provider lock") from None
