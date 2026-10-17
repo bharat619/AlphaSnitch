@@ -51,7 +51,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0002"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0003"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -611,7 +611,7 @@ def test_rejected_provenance_is_frozen_and_linked_to_failed_run(
         assert repo.get_run(run_id).status == OperationalStatus.FAILED
         assert repo.list_stages(run_id)[0].status == OperationalStatus.FAILED
         assert repo.list_snapshots(run_id) == ()
-        (artifact,) = repo.list_artifacts(run_id)
+        artifact = next(a for a in repo.list_artifacts(run_id) if a.name == "manifest.json")
     assert artifact.status == "SAVED"
     content = Path(artifact.reference).read_bytes()
     assert hashlib.sha256(content).hexdigest() == artifact.sha256
@@ -628,3 +628,241 @@ def test_rejected_provenance_is_frozen_and_linked_to_failed_run(
     raw = Path(diagnostic["raw_reference"]).read_bytes()
     assert raw == returned[0].payload
     assert hashlib.sha256(raw).hexdigest() == diagnostic["raw_sha256"]
+
+
+def collect_report(database, tmp_path, monkeypatch, scenario="valid"):
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(
+        app, ["--data-dir", str(tmp_path), "collect-fixture", "--scenario", scenario]
+    )
+    assert result.exit_code == (0 if scenario == "valid" else 1), result.output
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    "scenario,status,availability",
+    [
+        ("valid", "SUCCEEDED", "AVAILABLE"),
+        ("missing-bar", "FAILED", "PARTIAL"),
+        ("provider-failure", "FAILED", "UNAVAILABLE"),
+    ],
+)
+def test_report_artifacts_cover_success_and_collection_failures(
+    database, tmp_path, monkeypatch, scenario, status, availability
+):
+    import hashlib
+    from pathlib import Path
+
+    from stock_analyser.reports import ReportService
+
+    output = collect_report(database, tmp_path, monkeypatch, scenario)
+    run_id = UUID(output["run_id"])
+    assert output["report_saved"] is True
+    report = json.loads(Path(output["report_json"]).read_bytes())
+    manifest = json.loads(Path(output["manifest"]).read_bytes())
+    markdown = Path(output["report"]).read_text()
+    assert report["run_id"] == manifest["run_id"] == str(run_id)
+    assert report["schema_version"] == manifest["schema_version"] == "1"
+    assert report["snapshot_ids"] == manifest["snapshot_ids"]
+    assert report["report"]["status"] == status
+    assert report["report"]["availability"] == availability
+    assert set(report["report"]["stages"].values()) == {"NOT_RUN", "1"}
+    assert "recommendation" not in report["report"]
+    venue = report["instruments"][0]["venue"]
+    for value in (str(run_id), "USD", venue, "cutoff", "NOT_RUN", "Coverage limits"):
+        assert value in markdown
+    for snapshot_id in manifest["snapshot_ids"]:
+        assert snapshot_id in markdown
+    if scenario == "missing-bar":
+        assert "MISSING_SESSION" in markdown
+    if scenario == "provider-failure":
+        assert "FAILED" in markdown and "Snapshot IDs: none" in markdown
+    for name, info in manifest["files"].items():
+        content = (Path(output["manifest"]).parent / info["reference"]).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == info["sha256"]
+        assert name in ("report.md", "report.json")
+    service = ReportService(database, tmp_path / "reports")
+    with database.read() as repo:
+        before = repo.list_artifacts(run_id)
+        run = repo.get_run(run_id)
+        inputs = repo.get_report_input(run_id)
+    assert all(a.status == "SAVED" for a in before)
+    assert service.generate(run_id) == tuple(
+        sorted(before, key=lambda a: ("report.md", "report.json", "manifest.json").index(a.name))
+    )
+    with database.read() as repo:
+        assert repo.get_run(run_id) == run
+        assert repo.get_report_input(run_id) == inputs
+    assert service.show(run_id) == markdown
+    history = CliRunner().invoke(app, ["report", "history"])
+    assert history.exit_code == 0, history.output
+    assert str(run_id) in history.output and "report=SAVED" in history.output
+    menu = CliRunner().invoke(app, [], input="5\n6\n")
+    assert menu.exit_code == 0 and str(run_id) in menu.output
+    assert "Reports is unavailable" not in menu.output
+
+
+def test_failed_report_write_keeps_analysis_and_regenerates_after_restart(
+    database, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from stock_analyser import reports
+
+    database.initialize()
+    original_write = reports.atomic_write
+
+    def fail_second_file(path, content):
+        if path.name == "report.json":
+            raise OSError("Injected full disk; private-error-details")
+        original_write(path, content)
+
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(reports, "atomic_write", fail_second_file)
+        result = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-fixture"])
+    assert result.exit_code == 1
+    assert "Report write failed" in result.output
+    assert "private-error-details" not in result.output
+    assert '"report_saved": true' not in result.output
+    with database.read() as repo:
+        (run,) = repo.list_runs()
+        run_id = run.run_id
+        snapshots = repo.list_snapshots(run_id)
+        failed = repo.list_artifacts(run_id)
+        frozen = repo.get_report_input(run_id)
+    assert run.status == OperationalStatus.SUCCEEDED
+    assert snapshots and all(a.status == "FAILED" for a in failed)
+    assert str(run_id) in result.output
+    assert not list((tmp_path / "reports").rglob("*.tmp"))
+    show = CliRunner().invoke(app, ["report", "show", str(run_id)])
+    assert show.exit_code == 1 and "regenerate" in show.output
+    history = CliRunner().invoke(app, ["report", "history"])
+    assert "INCOMPLETE" in history.output
+    # Regeneration depends on the committed input, even if evidence files are unavailable.
+    for snapshot in snapshots:
+        Path(snapshot.reference).unlink()
+    env = {
+        **os.environ,
+        "STOCK_ANALYSER_DATABASE_URL": database.engine.url.render_as_string(hide_password=False),
+    }
+    code = (
+        "from stock_analyser.fixtures import RawFixtureProvider; "
+        "RawFixtureProvider.fetch = lambda *a: "
+        "(_ for _ in ()).throw(AssertionError('network recollection')); "
+        "from stock_analyser.cli import main; main()"
+    )
+    regenerated = subprocess.run(
+        [sys.executable, "-c", code, "report", "regenerate", str(run_id)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Report saved" in regenerated.stdout
+    shown = subprocess.run(
+        [sys.executable, "-m", "stock_analyser", "report", "show", str(run_id), "--json"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(shown.stdout)
+    assert report["run_id"] == str(run_id)
+    assert report["report"]["availability"] == "AVAILABLE"
+    service = reports.ReportService(database, tmp_path / "reports")
+    with database.read() as repo:
+        saved = repo.list_artifacts(run_id)
+        assert repo.get_run(run_id) == run
+        assert repo.list_snapshots(run_id) == snapshots
+        assert repo.get_report_input(run_id) == frozen
+    assert {a.artifact_id for a in saved} == {a.artifact_id for a in failed}
+    service.generate(run_id)
+    with database.read() as repo:
+        assert repo.list_artifacts(run_id) == saved
+    # Tampering is detected on reopen; regeneration restores the frozen artifact.
+    markdown = next(a for a in saved if a.name == "report.md")
+    Path(markdown.reference).write_bytes(b"damaged")
+    with pytest.raises(ValueError, match="regenerate"):
+        service.show(run_id)
+    assert "INCOMPLETE" in CliRunner().invoke(app, ["report", "history"]).output
+    service.generate(run_id)
+    assert "Data-readiness report" in service.show(run_id)
+
+
+def test_interrupted_collection_reports_completed_history_and_missing_timeframe(
+    database, tmp_path, monkeypatch
+):
+    from stock_analyser.calendars import CutoffPolicy, HistoryResolver
+    from stock_analyser.collection import CollectionService
+    from stock_analyser.contracts import HistoryRequirement
+    from stock_analyser.fixtures import RawFixtureProvider, synthetic_session_calendars
+    from stock_analyser.reports import ReportService
+
+    output = collect_report(database, tmp_path, monkeypatch)
+    with database.read() as repo:
+        original = repo.get_run(UUID(output["run_id"]))
+        instrument = repo.get_instrument(original.request.instrument_ids[0])
+    weekly = HistoryRequirement(timeframe="weekly", minimum_bars=1)
+    _, calendars = synthetic_session_calendars()
+    resolution = HistoryResolver(
+        calendars[0],
+        CutoffPolicy(earliest_session=date(2026, 10, 5), publication_timing="synthetic"),
+    ).resolve(original.market, instrument.venue, weekly, original.request.requested_as_of)
+    request = original.request.model_copy(
+        update={"request_id": uuid4(), "history": (*original.request.history, weekly)}
+    )
+    run = RunRecord(
+        run_id=uuid4(),
+        request=request,
+        market=original.market,
+        configuration=original.configuration,
+        source_version=original.source_version,
+        component_versions=original.component_versions,
+        history_resolutions=(*original.history_resolutions, resolution),
+    )
+    with database.write() as repo:
+        repo.create_run(run)
+
+    class FailWeekly(RawFixtureProvider):
+        def fetch(self, instrument, market, resolution):
+            if resolution.requirement.timeframe == "weekly":
+                raise ConnectionError("Injected second-history failure")
+            return super().fetch(instrument, market, resolution)
+
+    with pytest.raises(ConnectionError):
+        CollectionService(database, tmp_path / "snapshots").collect(
+            run.run_id, instrument, FailWeekly()
+        )
+    service = ReportService(database, tmp_path / "reports")
+    service.generate(run.run_id)
+    report = json.loads(service.show(run.run_id, "report.json"))
+    assert report["report"]["status"] == "FAILED"
+    assert report["report"]["availability"] == "PARTIAL"
+    assert len(report["snapshot_ids"]) == 1
+    assert report["report"]["evidence"][0]["availability"] == "AVAILABLE"
+    assert "weekly" in service.show(run.run_id)
+
+
+def test_blocked_report_destination_does_not_prevent_collection(database, tmp_path, monkeypatch):
+    blocker = tmp_path / "report-output"
+    blocker.write_text("This file prevents creating the report directory")
+    monkeypatch.setenv("STOCK_ANALYSER_REPORTS_DIR", str(blocker))
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-fixture"])
+    assert result.exit_code == 1 and "Report write failed" in result.output
+    with database.read() as repo:
+        (run,) = repo.list_runs()
+        assert run.status == OperationalStatus.SUCCEEDED
+        assert repo.list_snapshots(run.run_id)
+    blocker.unlink()
+    retry = CliRunner().invoke(app, ["report", "regenerate", str(run.run_id)])
+    assert retry.exit_code == 0, retry.output
+    assert "Report saved" in retry.output
+    assert len(list(blocker.rglob("report.md"))) == 1

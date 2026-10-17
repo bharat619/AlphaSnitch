@@ -161,6 +161,33 @@ class Repositories:
     def get_run(self, run_id: UUID) -> RunRecord:
         return self._get(s.runs, s.runs.c.run_id == run_id, RunRecord)
 
+    def list_runs(self, limit: int = 20) -> tuple[RunRecord, ...]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("History limit must be between 1 and 1000")
+        values = self.connection.scalars(
+            sa.select(s.runs.c.payload)
+            .order_by(s.runs.c.payload["created_at"].astext.desc(), s.runs.c.run_id)
+            .limit(limit)
+        )
+        return tuple(RunRecord.model_validate(value) for value in values)
+
+    def get_report_input(self, run_id: UUID):
+        from stock_analyser.reports import ReportInput
+
+        return self._get(s.report_inputs, s.report_inputs.c.run_id == run_id, ReportInput)
+
+    def put_report_input(self, report_input) -> None:
+        from stock_analyser.reports import ReportInput
+        from stock_analyser.security import redact_values
+
+        report_input = ReportInput.model_validate(report_input.model_dump(mode="json"))
+        frozen_run = RunRecord.model_validate(
+            redact_values(self.get_run(report_input.run_id).model_dump(mode="json"))
+        )
+        if report_input.run != frozen_run:
+            raise ValueError("Report input differs from persisted run")
+        self._immutable(s.report_inputs, {"run_id": report_input.run_id}, report_input)
+
     def set_run_status(
         self,
         run_id: UUID,

@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from uuid import UUID
 
 import questionary
 import typer
@@ -23,6 +24,12 @@ app = typer.Typer(
 )
 console = Console(highlight=False)
 WORKFLOWS = ("Buy", "Sell", "Portfolio", "Record offline trade", "Reports")
+report_app = typer.Typer(help="Browse, reopen, and regenerate saved data-readiness reports.")
+app.add_typer(report_app, name="report")
+
+
+def workflow_label(name: str) -> str:
+    return name if name == "Reports" else f"{name} [unavailable — not implemented]"
 
 
 def display(message: str) -> None:
@@ -43,7 +50,7 @@ def menu(runtime: Runtime) -> None:
             if interactive:
                 choices = [
                     questionary.Choice(
-                        f"{name} [unavailable — not implemented]",
+                        workflow_label(name),
                         value=str(index),
                         shortcut_key=str(index),
                     )
@@ -59,7 +66,7 @@ def menu(runtime: Runtime) -> None:
                 ).unsafe_ask()
             else:
                 for index, name in enumerate(WORKFLOWS, start=1):
-                    display(f"{index}. {name} [unavailable — not implemented]")
+                    display(f"{index}. {workflow_label(name)}")
                 display("6. Exit")
                 choice = Prompt.ask("Choose an action", console=console, default="6")
         except EOFError:
@@ -68,7 +75,15 @@ def menu(runtime: Runtime) -> None:
             return
         if choice in {str(index) for index in range(1, 6)}:
             selected = choice
-            display(f"{WORKFLOWS[int(choice) - 1]} is unavailable — not implemented.")
+            if choice == "5":
+                try:
+                    display_report_history(runtime)
+                    display("Open: stock-analyser report show <run-id>")
+                    display("Retry: stock-analyser report regenerate <run-id>")
+                except Exception as exc:
+                    display(f"Error: {safe_error(exc)}")
+            else:
+                display(f"{WORKFLOWS[int(choice) - 1]} is unavailable — not implemented.")
         else:
             display("Choose a number from 1 to 6.")
 
@@ -104,7 +119,10 @@ def doctor(ctx: typer.Context) -> None:
                     "runtime": configuration,
                     "configuration_sha256": configuration_hash,
                     "source": source_version(),
-                    "workflows": "unavailable — not implemented",
+                    "workflows": {
+                        "reports": "available",
+                        "analysis": "unavailable — not implemented",
+                    },
                     "offline_ready": True,
                     "database_configured": runtime.database_url is not None,
                 }
@@ -160,7 +178,9 @@ def main() -> None:
 @app.command("collect-fixture")
 def collect_fixture(
     ctx: typer.Context,
-    scenario: str = typer.Option("valid", help="Synthetic scenario: valid or missing-bar."),
+    scenario: str = typer.Option(
+        "valid", help="Synthetic scenario: valid, missing-bar, or provider-failure."
+    ),
 ) -> None:
     """Freeze one synthetic stock's evidence and persist quality outcomes."""
     from datetime import UTC, date, datetime
@@ -175,6 +195,7 @@ def collect_fixture(
         synthetic_session_calendars,
     )
     from stock_analyser.persistence.records import RunRecord
+    from stock_analyser.reports import ReportService
 
     database = None
     try:
@@ -182,7 +203,6 @@ def collect_fixture(
         runtime = ctx.obj
         if runtime.database_url is None:
             raise ConfigurationError("Set STOCK_ANALYSER_DATABASE_URL before collecting fixtures.")
-        runtime.initialize()
         database = Database(runtime.database_url.get_secret_value())
         database.initialize()
         markets, instruments, _ = synthetic_markets()
@@ -216,19 +236,31 @@ def collect_fixture(
             repo.put_security(Security(security_id=instrument.security_id, name="Synthetic ACME"))
             repo.put_instrument(instrument)
             repo.create_run(run)
-        packets = CollectionService(database, runtime.snapshots_dir).collect(
-            run.run_id, instrument, provider
-        )
+        try:
+            CollectionService(database, runtime.snapshots_dir).collect(
+                run.run_id, instrument, provider
+            )
+        except Exception:
+            # CollectionService persists a sanitized failure and any completed evidence.
+            # Render that state even when the provider failed before returning a packet.
+            with database.read() as repo:
+                if repo.get_run(run.run_id).status.value != "FAILED":
+                    raise
+        artifacts = ReportService(database, runtime.reports_dir).generate(run.run_id)
         with database.read() as repo:
             status = repo.get_run(run.run_id).status
-            manifest = repo.list_artifacts(run.run_id)[0].reference
+            snapshots = repo.list_snapshots(run.run_id)
+        references = {a.name: a.reference for a in artifacts}
         display(
             json.dumps(
                 {
                     "run_id": str(run.run_id),
                     "status": status.value,
-                    "manifest": manifest,
-                    "evidence": [p.metadata.model_dump(mode="json") for p in packets],
+                    "report_saved": True,
+                    "manifest": references["manifest.json"],
+                    "report": references["report.md"],
+                    "report_json": references["report.json"],
+                    "evidence": [s.metadata.model_dump(mode="json") for s in snapshots],
                 },
                 indent=2,
             )
@@ -237,6 +269,86 @@ def collect_fixture(
             raise typer.Exit(1)
     except typer.Exit:
         raise
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database is not None:
+            database.close()
+
+
+def report_database(runtime: Runtime) -> Database:
+    if runtime.database_url is None:
+        raise ConfigurationError("Set STOCK_ANALYSER_DATABASE_URL to access reports.")
+    return Database(runtime.database_url.get_secret_value())
+
+
+def display_report_history(runtime: Runtime, limit: int = 20) -> None:
+    from stock_analyser.reports import ReportService
+
+    database = report_database(runtime)
+    try:
+        with database.read() as repo:
+            runs = repo.list_runs(limit)
+        if not runs:
+            display("No report history yet.")
+        service = ReportService(database, runtime.reports_dir)
+        for run in runs:
+            try:
+                service.show(run.run_id)
+                state = "SAVED"
+            except ValueError:
+                state = "INCOMPLETE — regenerate"
+            display(
+                f"{run.run_id}  {run.created_at.isoformat()}  {run.market.market_id} "
+                f"{run.request.mode}  collection={run.status.value}  report={state}"
+            )
+    finally:
+        database.close()
+
+
+@report_app.command("history")
+def report_history(ctx: typer.Context, limit: int = typer.Option(20, min=1, max=1000)) -> None:
+    """List recent runs, including failed or incomplete report writes."""
+    try:
+        display_report_history(ctx.obj, limit)
+    except Exception as exc:
+        fail(exc)
+
+
+@report_app.command("show")
+def report_show(
+    ctx: typer.Context,
+    run_id: UUID,
+    as_json: bool = typer.Option(False, "--json", help="Show the structured report."),
+) -> None:
+    """Reopen saved files and verify all three artifact hashes."""
+    from stock_analyser.reports import ReportService
+
+    database = None
+    try:
+        database = report_database(ctx.obj)
+        display(
+            ReportService(database, ctx.obj.reports_dir).show(
+                run_id, "report.json" if as_json else "report.md"
+            )
+        )
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database is not None:
+            database.close()
+
+
+@report_app.command("regenerate")
+def report_regenerate(ctx: typer.Context, run_id: UUID) -> None:
+    """Retry artifact publication from persisted inputs without provider calls."""
+    from stock_analyser.reports import ReportService
+
+    database = None
+    try:
+        database = report_database(ctx.obj)
+        artifacts = ReportService(database, ctx.obj.reports_dir).generate(run_id)
+        display(f"Report saved for run {run_id}: {artifacts[0].reference}")
     except Exception as exc:
         fail(exc)
     finally:

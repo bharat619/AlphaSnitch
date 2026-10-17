@@ -1,6 +1,6 @@
 # Stock market analyser
 
-Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
+Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. [US-005](https://github.com/bharat619/AlphaSnitch/issues/5) freezes and validates fixture evidence; [US-006](https://github.com/bharat619/AlphaSnitch/issues/6) saves, reopens and regenerates data-readiness reports. Reports is available from the menu. Buy, Sell, Portfolio and Record offline trade remain visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
 ## Market-aware contracts (US-002)
 
@@ -94,13 +94,13 @@ uv run --locked stock-analyser
 
 `uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. The CLI automatically loads `.env` from the current working directory. Evaluation results and `.env.local` are not required or loaded by the application.
 
-The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
+The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Reports lists recent runs and shows the commands to reopen or regenerate a report. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
 
 For an installation without development tools, use `uv sync --locked --no-dev`. After syncing, the entry point is also available as `.venv/bin/stock-analyser` (Windows: `.venv\Scripts\stock-analyser.exe`), or after activating the environment as `stock-analyser`.
 
 ## PostgreSQL setup (US-003)
 
-Application state uses **PostgreSQL 18**, SQLAlchemy, Alembic, and psycopg. This implements the PostgreSQL choice in place of the issue's original SQLite/WAL requirement. Trade ledger tables, LangGraph checkpoints, evidence-file writing, and report generation remain for their implementing stories.
+Application state uses **PostgreSQL 18**, SQLAlchemy, Alembic, and psycopg. This implements the PostgreSQL choice in place of the issue's original SQLite/WAL requirement. Trade ledger tables and LangGraph checkpoints remain for their implementing stories.
 
 Install and start Docker with Compose support, then run these commands from the repository root. The example password uses URL-safe characters; when choosing another password, percent-encode reserved characters in the connection URL.
 
@@ -198,7 +198,7 @@ printf '1\n6\n' | uv run --locked stock-analyser
 uv run --locked stock-analyser --config config.example.toml doctor
 ```
 
-Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Provider calls, report generation, and trading decisions remain outside these foundation stories; PostgreSQL repository checks are described above.
+Tests cover offline menu/help, configuration precedence and path creation, unsupported markets, missing/invalid configuration, credential redaction in errors and exception logs, and version/configuration recording. Update dependencies intentionally with `uv lock`, then rerun the focused checks. Live provider calls and trading decisions remain outside these foundation stories; PostgreSQL repository and report checks are described above and below.
 
 ## Continuous integration
 
@@ -261,7 +261,7 @@ The valid fixture preserves fractional volume and exits successfully. The
 missing-bar fixture exits with code 1, persists `FAILED` collection/run status,
 and records `PARTIAL` evidence with `MISSING_SESSION`, `STALE_DATA`, and
 `INSUFFICIENT_HISTORY` findings. Each command prints the run ID, evidence metadata,
-and the absolute path of its saved `manifest.json`. These are entirely synthetic
+and the absolute paths of its saved report and `manifest.json`. These are entirely synthetic
 fixtures shipped in the package; no credentials for a market-data provider,
 network calls to such a provider, or `evaluation/` directory are required.
 
@@ -273,8 +273,8 @@ Evidence lives under the configured snapshots directory:
   adjustment and feed metadata, requested calendar periods and returned row count,
   calendar/cutoff policy versions, source version, and collection version.
 - `runs/<run-id>/manifest.json`: frozen run inputs, overall collection outcome,
-  and evidence packets. PostgreSQL stores its path and hash as a saved artifact,
-  plus each snapshot manifest's path/hash and the collection stage outcome.
+  and evidence packets. Reports retain this collection manifest's contents.
+  PostgreSQL stores each snapshot manifest's path/hash and the collection stage outcome.
 
 Files are published atomically without replacing existing files and are read-only.
 A correction or repeated CLI invocation creates a new run and new snapshot IDs.
@@ -311,6 +311,61 @@ If a response declares the wrong provider, feed, or symbol, its exact raw bytes
 are frozen before provenance validation. A failed diagnostic records the actual
 response labels, retrieval time, raw hash, requested resolution, and mismatch
 findings (`PROVIDER_MISMATCH`, `FEED_MISMATCH`, or `SYMBOL_MISMATCH`). The saved
-run manifest links to this diagnostic by path and hash in `rejected_responses`.
+run and report manifests link to this diagnostic by path and hash in `rejected_responses`.
 Rejected responses are kept outside trusted snapshot metadata and cannot satisfy
 mandatory history requirements.
+
+### Save, reopen and regenerate reports (US-006)
+
+After updating the application, run `stock-analyser init` to apply migration
+`0003`, which adds immutable report inputs in PostgreSQL. Every `collect-fixture`
+invocation that reaches collection saves a data-readiness report, including
+missing-bar and total provider failures:
+
+```sh
+uv run --locked stock-analyser collect-fixture --scenario valid
+uv run --locked stock-analyser collect-fixture --scenario missing-bar
+uv run --locked stock-analyser collect-fixture --scenario provider-failure
+uv run --locked stock-analyser report history --limit 20
+# Copy a run_id from collection output or history; these commands also work after restart:
+uv run --locked stock-analyser report show <run-id>
+uv run --locked stock-analyser report show <run-id> --json
+uv run --locked stock-analyser report regenerate <run-id>
+```
+
+The missing-bar and provider-failure commands exit with code 1 while still saving
+failure reports. Operational collection status, data availability and report-save
+status are separate. No strategy recommendation is generated: indicators,
+setups, debate and verdict are explicitly `NOT_RUN`.
+
+Reports live under the configured reports directory at `<date>/<run-id>/`:
+
+- `report.md`: readable market, currency, venues, history/cutoff policy, source
+  and adjustment basis, quality findings, collection outcomes and coverage limits.
+- `report.json`: schema-versioned request, frozen run/configuration, snapshot IDs,
+  evidence packets, per-instrument collection stages and data-readiness results.
+- `manifest.json`: matching run/snapshot/schema IDs, source/configuration versions,
+  snapshot references/hashes, rejected-response diagnostics and hashes of both reports.
+  PostgreSQL holds the manifest's own hash, avoiding a circular self-hash.
+
+Inputs are committed before writing the report destination. Each artifact is
+flushed to a sibling temporary file and published by atomic rename. The files
+are verified together before all three artifact records become `SAVED` and the
+CLI announces success. The three files are not one atomic filesystem transaction;
+an interrupted publication remains incomplete until regeneration finishes.
+
+If the destination is unwritable or a write fails, collection state and evidence
+remain intact. The error identifies the run and its `report regenerate` command;
+history lists the report as incomplete. Fix the destination permissions or free
+disk space, then regenerate. Retries reuse the persisted artifact paths and IDs,
+do not invoke providers or recalculate calendar cutoffs, and reproduce identical
+artifact bytes from the immutable inputs. Existing matching files are preserved;
+missing or damaged artifacts are repaired. `report show` checks all three saved
+hashes before displaying a report. Older runs can also be rendered from retained
+state; unavailable evidence packets are disclosed and prevent an `AVAILABLE` claim.
+
+PostgreSQL integration tests inject a failure after the first artifact, verify that
+analysis survives, regenerate in a separate process with provider fetching disabled,
+reopen the structured report after restart, and check repeated regeneration and
+tamper recovery. They also cover total provider failure and interruption after a
+completed daily history but before weekly history returns.

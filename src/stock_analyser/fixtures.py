@@ -307,7 +307,7 @@ class RawFixtureProvider:
     """Synthetic raw rows include exact close timestamps and decimal strings."""
 
     def __init__(self, scenario: str = "valid"):
-        if scenario not in ("valid", "missing-bar"):
+        if scenario not in ("valid", "missing-bar", "provider-failure"):
             raise ValueError("Unknown collection fixture")
         self.scenario = scenario
 
@@ -316,6 +316,8 @@ class RawFixtureProvider:
 
         from stock_analyser.collection import RawPriceResponse, encode
 
+        if self.scenario == "provider-failure":
+            raise ConnectionError("Synthetic provider failure")
         periods = resolution.periods
         if self.scenario == "missing-bar":
             periods = periods[:-1]

@@ -104,3 +104,9 @@ artifacts = sa.Table(
     sa.UniqueConstraint("run_id", "name", name="uq_artifact_run_name"),
     sa.CheckConstraint("status IN ('PENDING','SAVED','FAILED')", name="ck_artifact_status"),
 )
+report_inputs = sa.Table(
+    "report_inputs",
+    metadata,
+    sa.Column("run_id", sa.Uuid, sa.ForeignKey("analysis_runs.run_id"), primary_key=True),
+    sa.Column("payload", JSONB, nullable=False),
+)
