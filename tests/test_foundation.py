@@ -239,3 +239,17 @@ def test_source_provenance_when_git_is_unavailable(monkeypatch):
 
     monkeypatch.setattr("stock_analyser.version.subprocess.check_output", unavailable)
     assert source_version() == {"package_version": "0.1.0", "commit": None, "dirty": None}
+
+
+@pytest.mark.parametrize(
+    "arguments", [["-c", "from stock_analyser.cli import app"], ["-m", "stock_analyser", "--help"]]
+)
+def test_startup_without_system_timezone_data(arguments):
+    result = subprocess.run(
+        [sys.executable, *arguments],
+        env={**os.environ, "PYTHONTZPATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

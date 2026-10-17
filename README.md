@@ -2,6 +2,42 @@
 
 Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issue [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) adds installation, configuration, the command menu, and setup diagnostics. Buy, Sell, Portfolio, Record offline trade, and Reports are visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
+## Market-aware contracts (US-002)
+
+Version 1 Pydantic contracts live in `stock_analyser.contracts`. Securities and listings have immutable UUID identities; provider symbols use half-open effective-date intervals. Instrument lookup requires a market and rejects ambiguous listings unless a venue is supplied. Frozen contracts use tuples for nested collections and reject unknown fields and unsupported schema versions.
+
+`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. Calendar references are adapter contracts, not a bundled exchange schedule. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. Live HTTP adapters and history-selection policy execution belong to later stories.
+
+Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Every price source declares inclusive local session dates within its effective symbol mapping, allowing a snapshot to retain separate sources before and after a ticker rename. Any returned bars require provenance, including partial results, and price-history validation checks that sources cover every bar's session.
+
+An `AVAILABLE` report must cover each requested instrument and mandatory timeframe with the requested adjustment and minimum-plus-warmup bar count in a single available snapshot. Sector reports must provide `resolved_instrument_ids` before claiming availability. Optional history may be omitted. Data-readiness reports separate operational status, data availability and strategy verdict. Indicators, setups, debate and verdict remain `NOT_RUN`, including when data collection succeeds.
+
+The locked `tzdata` dependency supplies IANA timezone data when the operating system has none. Startup regression tests disable system timezone lookup with `PYTHONTZPATH=''`.
+
+Run this offline demonstration after installation (`TEST` is synthetic and cannot be selected through CLI flags, environment or TOML):
+
+```sh
+uv run --locked --no-sync python - <<'PY'
+from datetime import UTC, datetime
+from stock_analyser.contracts import HistoryRequirement
+from stock_analyser.fixtures import synthetic_markets
+
+markets, instruments, adapters = synthetic_markets()
+as_of = datetime(2026, 10, 16, 15, tzinfo=UTC)
+for market_id, adapter in zip(("US", "TEST"), adapters, strict=True):
+    market = markets.resolve(market_id)
+    instrument = instruments.resolve(market_id, "ACME")
+    evidence = adapter.history(
+        instrument, market,
+        HistoryRequirement(timeframe="daily", minimum_bars=1), as_of,
+    ).metadata
+    print(market_id, instrument.instrument_id, evidence.currency,
+          evidence.sources[0].provider, evidence.session_cutoff.isoformat())
+PY
+```
+
+The two `ACME` listings have distinct security and instrument IDs, USD/INR currencies and provider routes. At the same as-of instant, the fixture US calendar resolves October 15 while the second market resolves October 16. The adapters use explicit synthetic closes and fractional-volume bars, require no credentials and make no network calls. Research and corporate-action fixtures intentionally contain empty datasets; the LLM fixture returns a fixed synthetic response.
+
 ## Install and launch
 
 Use **Python 3.12** and [uv](https://docs.astral.sh/uv/getting-started/installation/). From a clean checkout:

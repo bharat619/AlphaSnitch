@@ -8,6 +8,8 @@ from typing import Literal
 from platformdirs import user_config_path, user_data_path
 from pydantic import BaseModel, ConfigDict
 
+from stock_analyser.markets import MarketRegistry
+
 
 class PathSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -71,8 +73,10 @@ def load_runtime(
         ) from None
 
     active_market = market or os.environ.get("STOCK_ANALYSER_MARKET") or settings.market
-    if active_market != "US":
-        raise ConfigurationError("Unsupported market. Only US is enabled.")
+    try:
+        MarketRegistry().resolve(active_market)
+    except ValueError:
+        raise ConfigurationError("Unsupported market. Only US is enabled.") from None
 
     def resolve(value: Path) -> Path:
         value = value.expanduser()
