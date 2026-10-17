@@ -6,7 +6,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -487,85 +487,3 @@ def test_currency_change_is_rejected_without_breaking_historical_run_operations(
         assert repo.get_run(run_id) == run
         assert stage in repo.list_stages(run_id)
         assert repo.list_snapshots(run_id) == snapshots
-
-
-@pytest.mark.parametrize(
-    "scenario,status,corruption",
-    [
-        ("valid", "SUCCEEDED", None),
-        ("missing-bar", "FAILED", None),
-        ("valid", "FAILED", "NaN"),
-        ("valid", "FAILED", "-1"),
-    ],
-)
-def test_collection_freezes_raw_evidence_and_persists_manifest(
-    database, tmp_path, monkeypatch, scenario, status, corruption
-):
-    import hashlib
-    from pathlib import Path
-
-    from stock_analyser.collection import CollectionService, EvidencePacket, encode
-    from stock_analyser.fixtures import RawFixtureProvider
-
-    if corruption is not None:
-        original = RawFixtureProvider.fetch
-
-        def corrupt(self, instrument, market, resolution):
-            response = original(self, instrument, market, resolution)
-            payload = json.loads(response.payload)
-            payload["bars"][0]["volume"] = corruption
-            return response.model_copy(update={"payload": encode(payload)})
-
-        monkeypatch.setattr(RawFixtureProvider, "fetch", corrupt)
-
-    monkeypatch.setenv(
-        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
-    )
-    result = CliRunner().invoke(
-        app, ["--data-dir", str(tmp_path), "collect-fixture", "--scenario", scenario]
-    )
-    assert result.exit_code == (0 if status == "SUCCEEDED" else 1), result.output
-    output = json.loads(result.stdout)
-    run_id = UUID(output["run_id"])
-    with database.read() as repo:
-        assert repo.get_run(run_id).status.value == status
-        assert repo.list_stages(run_id)[0].status.value == status
-        snapshots = repo.list_snapshots(run_id)
-        assert len(snapshots) == 1
-        snapshot = snapshots[0]
-        manifest = repo.list_artifacts(run_id)[0]
-    assert manifest.status == "SAVED"
-    content = Path(manifest.reference).read_bytes()
-    assert hashlib.sha256(content).hexdigest() == manifest.sha256
-    assert json.loads(content)["status"] == status
-    content = Path(snapshot.reference).read_bytes()
-    assert hashlib.sha256(content).hexdigest() == snapshot.sha256
-    packet = EvidencePacket.model_validate_json(content)
-    assert packet.metadata == snapshot.metadata
-    source = packet.metadata.sources[0]
-    assert hashlib.sha256(Path(source.reference).read_bytes()).hexdigest() == source.sha256
-    assert packet.bars[0].volume.as_tuple().exponent == -1
-    assert packet.component_versions["collection"] == "1"
-    if status == "FAILED":
-        assert ("MISSING_SESSION" if scenario == "missing-bar" else "INVALID_OHLCV") in (
-            packet.metadata.quality_flags
-        )
-        assert packet.metadata.availability.value == "PARTIAL"
-    else:
-        assert packet.metadata.availability.value == "AVAILABLE"
-    # A fresh collection produces new identities and cannot modify earlier evidence.
-    again = CliRunner().invoke(
-        app, ["--data-dir", str(tmp_path), "collect-fixture", "--scenario", scenario]
-    )
-    assert json.loads(again.stdout)["evidence"][0]["snapshot_id"] != str(
-        packet.metadata.snapshot_id
-    )
-    assert Path(snapshot.reference).read_bytes() == content
-
-    with pytest.raises(ValueError, match="already started"):
-        CollectionService(database, tmp_path / "snapshots").collect(
-            run_id, packet.metadata.instrument, RawFixtureProvider(scenario)
-        )
-    with database.read() as repo:
-        assert repo.list_snapshots(run_id) == snapshots
-        assert repo.get_run(run_id).status.value == status

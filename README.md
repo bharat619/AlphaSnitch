@@ -92,7 +92,7 @@ uv run --locked stock-analyser --help
 uv run --locked stock-analyser
 ```
 
-`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. The CLI automatically loads `.env` from the current working directory. Evaluation results and `.env.local` are not required or loaded by the application.
+`uv.lock` pins runtime and development dependencies; `--locked` refuses to silently update it. The build backend version is pinned separately in `pyproject.toml`. `.python-version` selects Python 3.12 and the package restricts its supported baseline to 3.12. The first installation downloads packages; launching help, the menu, and `doctor` needs no provider credentials or network. `init` requires access to your PostgreSQL server. Evaluation results and `.env.local` are not required or loaded by the application.
 
 The menu shows the active US market and six actions: Buy, Sell, Portfolio, Record offline trade, Reports, and Exit. In an interactive terminal, use **↑/↓** or numbers **1–6** to highlight an action and **Enter** to select it. Selecting an unavailable action explains its status and returns to the menu with that action highlighted. Select Exit or press Ctrl+C to quit. Piped input and terminals without interactive support use a numbered prompt, where `6`, an empty line, or EOF exits.
 
@@ -105,16 +105,13 @@ Application state uses **PostgreSQL 18**, SQLAlchemy, Alembic, and psycopg. This
 Install and start Docker with Compose support, then run these commands from the repository root. The example password uses URL-safe characters; when choosing another password, percent-encode reserved characters in the connection URL.
 
 ```sh
-cp .env.example .env
-# Edit .env once to match your database password and port.
+export STOCK_ANALYSER_POSTGRES_PASSWORD='local-development-only'
 docker compose up -d --wait
+export STOCK_ANALYSER_DATABASE_URL="postgresql+psycopg://stock_analyser:${STOCK_ANALYSER_POSTGRES_PASSWORD}@127.0.0.1:5432/stock_analyser"
 uv run --locked stock-analyser init
-uv run stock-analyser collect-fixture --scenario valid
 ```
 
-Compose and the CLI both read the repository-root `.env` when run from that directory, so subsequent commands need no exports. `.env` is gitignored; `.env.example` is a credential-free local-development template. Use the password already configured in your database if it exists. Shell environment variables override `.env` values. The CLI loads only `.env` in the current working directory, without searching parent directories or loading `.env.local`.
-
-Compose publishes PostgreSQL on localhost only. If port 5432 is occupied, put `STOCK_ANALYSER_POSTGRES_PORT=55432` in `.env` and use port 55432 in the URL. The password variable is required by Compose. The application reads `STOCK_ANALYSER_DATABASE_URL` from `.env` or the shell; credentials do not belong in TOML. `doctor` reports whether a URL is configured without exposing it or connecting to the database. Both `postgresql://` and `postgresql+psycopg://` URLs use psycopg.
+Compose publishes PostgreSQL on localhost only. If port 5432 is occupied, set `STOCK_ANALYSER_POSTGRES_PORT=55432` before starting Compose and use port 55432 in the URL. The password variable is required by Compose. The application reads only `STOCK_ANALYSER_DATABASE_URL`; it does not automatically load credentials from `.env.local` or TOML. `doctor` reports whether a URL is configured without exposing it or connecting to the database. Both `postgresql://` and `postgresql+psycopg://` URLs use psycopg.
 
 `init` creates local runtime directories, applies packaged Alembic migrations to the selected database, and seeds the versioned US market configuration. The database itself must already exist; Compose creates it on first startup. Repeating `init` preserves existing records and does not duplicate market configuration. Migrations and seed data share one transaction. Initialization errors roll back database changes; directories may already have been created.
 
@@ -157,8 +154,8 @@ The synthetic run retains its requested cutoff, complete versioned market config
 The test account needs `CREATEDB`. The Compose account has this permission; ordinary application accounts only need schema migration and application table access. Each integration test creates a randomly named temporary database and drops only that database afterward. Tests never initialize or modify the database named in the test URL.
 
 ```sh
-# Add STOCK_ANALYSER_TEST_DATABASE_URL to .env, using the same local database URL.
-uv run --locked --env-file .env pytest -q
+export STOCK_ANALYSER_TEST_DATABASE_URL="$STOCK_ANALYSER_DATABASE_URL"
+uv run --locked pytest -q
 ```
 
 Without `STOCK_ANALYSER_TEST_DATABASE_URL`, PostgreSQL integration tests are explicitly skipped and offline tests still run. CI always supplies a PostgreSQL service and runs the integration tests. Checks cover empty/repeated initialization, schema parity, downgrade/upgrade and instrument-version backfill, transaction rollback, symbol renames with historical snapshot reuse, invalid artifact update rejection, repeated fixture collection, immutable records, market/cutoff validation, independent artifact failure/retry, cross-connection write coordination, and process restart recovery. No private evaluation results or provider credentials are used.
@@ -181,7 +178,7 @@ Copy [config.example.toml](config.example.toml) to the user configuration locati
 
 The data directory contains `database/`, `snapshots/`, `cache/`, `reports/`, and `logs/`. These are reserved runtime locations; this story logs only to stderr. Each directory can be overridden independently; `database/` does not control the PostgreSQL data location. Relative configured paths resolve beside the configuration file; relative CLI/environment overrides use that same base (the default user configuration directory when no file is supplied). Prefer absolute paths for overrides.
 
-Configuration precedence is CLI options → shell environment variables → current-directory `.env` → TOML → defaults. Supported variables are `STOCK_ANALYSER_CONFIG`, `STOCK_ANALYSER_MARKET`, `STOCK_ANALYSER_DATA_DIR`, `STOCK_ANALYSER_DATABASE_DIR`, `STOCK_ANALYSER_SNAPSHOTS_DIR`, `STOCK_ANALYSER_CACHE_DIR`, `STOCK_ANALYSER_REPORTS_DIR`, `STOCK_ANALYSER_LOGS_DIR`, and `STOCK_ANALYSER_DATABASE_URL` (from `.env` or the shell). Explicit child-directory overrides take precedence over the data-directory default. A missing explicitly requested configuration file, malformed TOML, unknown settings, or unsupported market fails clearly. Only `US` is enabled.
+Configuration precedence is CLI options → environment variables → TOML → defaults. Supported variables are `STOCK_ANALYSER_CONFIG`, `STOCK_ANALYSER_MARKET`, `STOCK_ANALYSER_DATA_DIR`, `STOCK_ANALYSER_DATABASE_DIR`, `STOCK_ANALYSER_SNAPSHOTS_DIR`, `STOCK_ANALYSER_CACHE_DIR`, `STOCK_ANALYSER_REPORTS_DIR`, `STOCK_ANALYSER_LOGS_DIR`, and the environment-only `STOCK_ANALYSER_DATABASE_URL`. Explicit child-directory overrides take precedence over the data-directory default. A missing explicitly requested configuration file, malformed TOML, unknown settings, or unsupported market fails clearly. Only `US` is enabled.
 
 Keep provider credentials in environment variables or a local secrets mechanism; AWS integration will use the SDK credential chain. Credentials do not belong in TOML. The example contains no secrets. Terminal errors and the application's logging formatter redact known credential environment values, API-key/token/password assignments, and bearer tokens. Configuration validation never echoes invalid input values. Optional credentials are not validated or required for these offline commands.
 
@@ -246,63 +243,3 @@ Complete sector-universe eligibility/classification and liquidity selection; ver
 ## Local files and credentials
 
 The evaluation scripts and their dependency versions are in `evaluation/`. The API key stays in gitignored `.env.local`; no key is embedded in documentation or saved results. Virtual environments, provider cookie caches and raw results are also gitignored. Raw evidence is saved locally and is not required by the installable CLI or its tests.
-
-### Freeze and validate synthetic evidence (US-005)
-
-With PostgreSQL running and `STOCK_ANALYSER_DATABASE_URL` configured as above:
-
-```sh
-uv run stock-analyser collect-fixture --scenario valid
-uv run stock-analyser collect-fixture --scenario missing-bar
-```
-
-Both commands create a new one-stock run with three requested daily sessions.
-The valid fixture preserves fractional volume and exits successfully. The
-missing-bar fixture exits with code 1, persists `FAILED` collection/run status,
-and records `PARTIAL` evidence with `MISSING_SESSION`, `STALE_DATA`, and
-`INSUFFICIENT_HISTORY` findings. Each command prints the run ID, evidence metadata,
-and the absolute path of its saved `manifest.json`. These are entirely synthetic
-fixtures shipped in the package; no credentials for a market-data provider,
-network calls to such a provider, or `evaluation/` directory are required.
-
-Evidence lives under the configured snapshots directory:
-
-- `<snapshot-id>/source.json`: exact raw response bytes, including invalid rows.
-- `<snapshot-id>/manifest.json`: normalized valid bars, all quality findings,
-  source hash and retrieval time, instrument and frozen market configuration,
-  adjustment and feed metadata, requested calendar periods and returned row count,
-  calendar/cutoff policy versions, source version, and collection version.
-- `runs/<run-id>/manifest.json`: frozen run inputs, overall collection outcome,
-  and evidence packets. PostgreSQL stores its path and hash as a saved artifact,
-  plus each snapshot manifest's path/hash and the collection stage outcome.
-
-Files are published atomically without replacing existing files and are read-only.
-A correction or repeated CLI invocation creates a new run and new snapshot IDs.
-Hashes cover the exact stored bytes. The source record's session interval is the
-queried window; it does not assert that every session was returned. Returned
-sessions and row-level failures remain visible in the evidence packet and source.
-
-The versioned `price-quality-1` policy requires unique ascending session labels,
-exact timezone-aware completed-period close timestamps, finite positive OHLC
-values with consistent high/low bounds, and finite nonnegative volume. Weekly
-labels, when requested through the service, refer to the final session of each
-resolved week. Missing or unexpected periods, invalid values, adjustment mismatch,
-retrieval before the requested as-of time, and unverified publication policy are
-errors. The full history resolution retains market-closed/publication-delay
-context; a closed market alone does not imply stale data. Missing expected bars
-are stale even when an older response has enough total rows.
-
-Volume is stored as decimal strings without rounding to integers. Explicit zero
-volume is retained and flagged `ZERO_VOLUME` as a warning; missing/null volume is
-an error and is never replaced with zero. A current open at or below 60%, or at or
-above 160%, of the previous close triggers a blocking
-`CORPORATE_ACTION_DISCONTINUITY` finding. This conservative heuristic catches
-large split-like gaps but cannot identify all corporate actions; it neither
-repairs prices nor certifies adjustment correctness. The response's declared
-adjustment is preserved separately from the requested policy.
-
-An error in any mandatory history blocks `SUCCEEDED`. Valid normalized rows in a
-failed packet are retained for inspection and must not be treated as usable
-assessment input. The service does not run indicators, setup detection, or agent
-conclusions. Filesystem/provider exceptions propagate without claiming success;
-previously attached snapshots remain available for inspection.

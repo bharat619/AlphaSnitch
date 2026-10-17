@@ -7,7 +7,6 @@ from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from stock_analyser.calendars import CutoffPolicy, HistoryResolver
-from stock_analyser.config import load_environment
 from stock_analyser.contracts import (
     AnalysisRequest,
     HistoryRequirement,
@@ -100,7 +99,6 @@ def main() -> None:
     parser.add_argument("action", choices=("create", "show"))
     parser.add_argument("run_id", nargs="?", type=UUID)
     args = parser.parse_args()
-    load_environment()
     url = os.environ.get("STOCK_ANALYSER_DATABASE_URL")
     if not url:
         parser.error("Set STOCK_ANALYSER_DATABASE_URL first")
