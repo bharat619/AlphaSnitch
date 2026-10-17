@@ -19,7 +19,11 @@ The CLI does this for stocks, benchmarks, actions, pages and retries. Embedded
 callers must hold the same process lease throughout collection. The file is never
 unlinked, and its next permissible request time is flushed to disk before a
 request. A new process waits at least one configured interval before starting.
-The request budget includes failed attempts. HTTP timeouts and response size
+The request budget includes failed attempts. Retry-After deadlines are persisted
+even when they exceed the configured wait limit. That condition stops the shared
+allowance and the remaining smoke listings after saving the failed run/report.
+On restart, an excessive remaining cooldown fails without sending a request or
+waiting beyond the configured bound. HTTP timeouts and response size
 are bounded; retries never bypass pacing. No response cache currently exists.
 
 ## Retained-field allowlist

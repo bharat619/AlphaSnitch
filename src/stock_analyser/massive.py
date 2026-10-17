@@ -32,6 +32,10 @@ class MassiveError(ValueError):
     """Safe public error; never includes upstream content or request details."""
 
 
+class ProviderCooldownError(MassiveError):
+    """The shared allowance stopped this run to honor a provider cooldown."""
+
+
 class MassiveSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -102,6 +106,7 @@ class ProviderAllowance:
         self.sleep = sleep
         self._mutex = threading.Lock()
         self._file = None
+        self._stopped = False
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,17 +144,22 @@ class ProviderAllowance:
         self._file.flush()
         os.fsync(self._file.fileno())
 
-    def acquire(self):
+    def acquire(self, *, max_wait_seconds: float | None = None):
         with self._mutex:
             if self._file is None:
                 raise MassiveError("Provider allowance requires an active process lease")
-            self.sleep(max(0, self._next - self.clock()))
+            wait = max(0, self._next - self.clock())
+            if self._stopped or (max_wait_seconds is not None and wait > max_wait_seconds):
+                self._stopped = True
+                raise ProviderCooldownError("Massive cooldown exceeds the configured wait bound")
+            self.sleep(wait)
             self._next = self.clock() + self.interval
             self._save()
 
-    def defer(self, seconds: float):
+    def defer(self, seconds: float, *, stop: bool = False):
         with self._mutex:
             self._next = max(self._next, self.clock() + seconds)
+            self._stopped = self._stopped or stop
             self._save()
 
 
@@ -182,8 +192,8 @@ class MassiveClient:
                     delay = parsedate_to_datetime(value).timestamp() - self.allowance.clock()
                 except (ValueError, TypeError, OverflowError):
                     raise MassiveError("Massive returned an invalid retry delay") from None
-        if not math.isfinite(delay) or delay > self.settings.max_retry_delay_seconds:
-            raise MassiveError("Massive retry delay exceeds the configured bound")
+        if not math.isfinite(delay):
+            raise MassiveError("Massive returned an invalid retry delay")
         return max(0, delay)
 
     def request(self, target: str) -> dict:
@@ -192,7 +202,9 @@ class MassiveClient:
                 if self._requests >= self.settings.max_requests:
                     raise MassiveError("Massive request budget exhausted")
                 self._requests += 1
-            self.allowance.acquire()
+            self.allowance.acquire(
+                max_wait_seconds=max(self.allowance.interval, self.settings.max_retry_delay_seconds)
+            )
             try:
                 response = self.transport(target, self._key, self.settings.timeout_seconds)
             except (OSError, http.client.HTTPException):
@@ -209,7 +221,13 @@ class MassiveClient:
             )
             if response.status == 429 or 500 <= response.status <= 599:
                 # Persist the cooldown even when the final attempt failed.
-                self.allowance.defer(self._delay(response, attempt))
+                delay = self._delay(response, attempt)
+                exceeds_wait = delay > self.settings.max_retry_delay_seconds
+                self.allowance.defer(delay, stop=exceeds_wait)
+                if exceeds_wait:
+                    raise ProviderCooldownError(
+                        "Massive cooldown exceeds the configured wait bound"
+                    )
                 if attempt == self.settings.retries:
                     raise MassiveError("Massive retryable HTTP failure exhausted retries")
                 continue

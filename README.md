@@ -389,7 +389,8 @@ requests per minute with a shared 100-attempt budget and two retries per request
 The twelve unpaginated requests take about 2.5 minutes; pagination and retries
 can take longer. No live stress testing or provider fallback occurs. Every
 attempt is paced, including pages and retries. Retry-After seconds and HTTP dates
-are respected; invalid/excessive delays stop collection. The CLI holds a fixed
+are respected. Excessive delays are persisted before stopping all remaining
+collection requests; restarting cannot bypass the saved deadline. The CLI holds a fixed
 per-user `massive.lock` for the complete run, independently of `--data-dir`.
 Competing runs fail immediately. Cooldowns persist across process restarts.
 This controls cooperating local processes; it cannot coordinate another machine
@@ -397,8 +398,10 @@ or unrelated applications using the same credential.
 
 Fresh readiness remains blocked with `PUBLICATION_UNVERIFIED`, even when every
 requested bar is present. A valid saved smoke report can therefore show
-collection `FAILED` and data `PARTIAL`. Exit zero means both reports and both
-histories per listing were saved; missing histories/provider failures exit one.
+collection `FAILED` and data `PARTIAL`. Exit zero requires both reports and
+complete, valid histories per listing. Only `PUBLICATION_UNVERIFIED` is ignored
+for the command exit status; empty/short histories, other quality errors and
+provider failures exit one.
 The adapter records transport observations, not subscription or billing claims.
 See [Massive evidence policy](docs/massive-evidence.md) for retained fields,
 normalization, and the publication-timing evidence still needed.

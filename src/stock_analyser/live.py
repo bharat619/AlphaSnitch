@@ -13,9 +13,9 @@ from stock_analyser.contracts import (
     SymbolMapping,
 )
 from stock_analyser.markets import US_MARKET
-from stock_analyser.massive import MassiveEvidenceProvider
+from stock_analyser.massive import MassiveEvidenceProvider, ProviderCooldownError
 from stock_analyser.persistence.records import RunRecord
-from stock_analyser.reports import ReportService
+from stock_analyser.reports import ReportInput, ReportService
 from stock_analyser.version import source_version
 
 
@@ -35,6 +35,24 @@ def smoke_instrument(symbol: str, venue: str) -> Instrument:
                 effective_from=date(2020, 1, 1),
             ),
         ),
+    )
+
+
+def has_complete_history(data: ReportInput) -> bool:
+    """Ignore only unverified publication timing when judging smoke coverage."""
+    return not data.evidence_issues and all(
+        any(
+            packet.metadata.timeframe == requirement.timeframe
+            and packet.metadata.adjustment == requirement.adjustment
+            and len(packet.bars) >= requirement.required_bars
+            and not any(
+                finding.severity == "error" and finding.code != "PUBLICATION_UNVERIFIED"
+                for finding in packet.findings
+            )
+            for packet in data.packets
+        )
+        for requirement in data.run.request.history
+        if requirement.mandatory
     )
 
 
@@ -95,15 +113,19 @@ def collect_smoke(database, runtime, client, *, requested=None):
             repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
             repo.put_instrument(instrument)
             repo.create_run(run)
+        stop_remaining = False
         try:
             CollectionService(database, runtime.snapshots_dir).collect(
                 run.run_id, instrument, provider
             )
-        except Exception:
+        except Exception as exc:
+            stop_remaining = isinstance(exc, ProviderCooldownError)
             with database.read() as repo:
                 if repo.get_run(run.run_id).status.value != "FAILED":
                     raise
-        artifacts = ReportService(database, runtime.reports_dir).generate(run.run_id)
+        reports = ReportService(database, runtime.reports_dir)
+        artifacts = reports.generate(run.run_id)
+        coverage_complete = has_complete_history(reports.freeze(run.run_id))
         with database.read() as repo:
             snapshots = repo.list_snapshots(run.run_id)
         results.append(
@@ -114,7 +136,11 @@ def collect_smoke(database, runtime, client, *, requested=None):
                 "report": next(a.reference for a in artifacts if a.name == "report.md"),
                 "report_json": next(a.reference for a in artifacts if a.name == "report.json"),
                 "snapshot_count": len(snapshots),
+                "history_complete": coverage_complete,
+                "collection_stopped": stop_remaining,
                 "publication_timing": "unverified",
             }
         )
+        if stop_remaining:
+            break
     return results

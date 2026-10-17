@@ -365,3 +365,42 @@ def test_corporate_actions_reject_foreign_symbol(client_factory):
         MassiveActionsProvider(client).fetch(
             smoke_instrument("AAPL", "XNAS"), US_MARKET, date(2026, 10, 14), date(2026, 10, 16)
         )
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("retry_after", ["300", "Thu, 01 Jan 1970 00:21:52 GMT"])
+def test_excessive_retry_delay_stops_shared_allowance_and_survives_restart(
+    client_factory, status, retry_after
+):
+    from stock_analyser.massive import ProviderCooldownError
+
+    client, calls, clock = client_factory(
+        [
+            reply(status=status, headers={"Retry-After": retry_after}),
+            reply(),
+        ]
+    )
+    with pytest.raises(ProviderCooldownError):
+        client.request("/stock")
+    assert float(client.allowance.path.read_text()) == 1312
+    other = MassiveClient(
+        SecretStr("secret-do-not-retain"), client.allowance, client.settings, client.transport
+    )
+    with pytest.raises(ProviderCooldownError):
+        other.request("/benchmark")
+    assert len(calls) == 1 and clock.sleeps == [12]
+    client.allowance.__exit__()
+    with ProviderAllowance(client.allowance.path, 5, clock=clock.time, sleep=clock.sleep) as lease:
+        restarted = MassiveClient(
+            SecretStr("secret-do-not-retain"), lease, client.settings, client.transport
+        )
+        with pytest.raises(ProviderCooldownError):
+            restarted.request("/benchmark")
+    assert len(calls) == 1 and clock.sleeps == [12]
+    clock.now = 1312
+    with ProviderAllowance(client.allowance.path, 5, clock=clock.time, sleep=clock.sleep) as lease:
+        restarted = MassiveClient(
+            SecretStr("secret-do-not-retain"), lease, client.settings, client.transport
+        )
+        restarted.request("/benchmark")
+    assert len(calls) == 2 and calls[-1][1] >= 1312

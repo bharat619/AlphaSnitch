@@ -376,7 +376,7 @@ def collect_massive(ctx: typer.Context) -> None:
             database.initialize()
             results = collect_smoke(database, runtime, client)
         display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
-        if any(r["snapshot_count"] != 2 for r in results):
+        if any(not r["history_complete"] or r["collection_stopped"] for r in results):
             raise typer.Exit(1)
     except typer.Exit:
         raise
