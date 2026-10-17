@@ -1,0 +1,394 @@
+"""Offline data-readiness reports with durable inputs and retryable publication."""
+
+import hashlib
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal, Self
+from uuid import UUID, uuid4, uuid5
+
+from pydantic import model_validator
+
+from stock_analyser.collection import EvidencePacket, encode
+from stock_analyser.contracts import (
+    Contract,
+    DataAvailability,
+    DataReadinessReport,
+    Instrument,
+    OperationalStatus,
+    validate_request_coverage,
+)
+from stock_analyser.persistence import Database
+from stock_analyser.persistence.records import (
+    ArtifactRecord,
+    RunRecord,
+    SnapshotReference,
+    StageRecord,
+)
+from stock_analyser.security import redact_values
+
+ARTIFACT_NAMES = ("report.md", "report.json", "manifest.json")
+
+
+class ReportInput(Contract):
+    """Committed before touching the report destination; never recollected on retry."""
+
+    run_id: UUID
+    run: RunRecord
+    report: DataReadinessReport
+    instruments: tuple[Instrument, ...]
+    collection_stages: tuple[StageRecord, ...]
+    snapshots: tuple[SnapshotReference, ...]
+    packets: tuple[EvidencePacket, ...]
+    collection_manifest: dict[str, object] | None = None
+    evidence_issues: tuple[str, ...] = ()
+    renderer_version: Literal["data-readiness-1"] = "data-readiness-1"
+
+    @model_validator(mode="after")
+    def consistent_run(self) -> Self:
+        if self.run_id != self.run.run_id or self.run_id != self.report.run_id:
+            raise ValueError("Report input run IDs differ")
+        if self.report.request != self.run.request or self.report.status != self.run.status:
+            raise ValueError("Report differs from frozen run")
+        if self.report.evidence != tuple(s.metadata for s in self.snapshots):
+            raise ValueError("Report snapshot metadata differs")
+        return self
+
+
+class ReportWriteError(OSError):
+    pass
+
+
+def atomic_write(path: Path, content: bytes) -> None:
+    """Flush a sibling temporary file, then publish it by atomic rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{uuid4()}.tmp"
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def verified_bytes(reference: str, sha256: str) -> bytes:
+    content = Path(reference).read_bytes()
+    if hashlib.sha256(content).hexdigest() != sha256:
+        raise ValueError("Saved file hash mismatch")
+    return content
+
+
+def render_markdown(data: ReportInput) -> bytes:
+    run, report = data.run, data.report
+    lines = [
+        "# Data-readiness report",
+        "",
+        f"Run ID: {data.run_id}",
+        f"Schema version: {data.schema_version}; renderer: {data.renderer_version}",
+        "Snapshot IDs: "
+        + (", ".join(str(s.metadata.snapshot_id) for s in data.snapshots) or "none"),
+        f"Operational status: {report.status}; data availability: {report.availability}",
+        f"Reason: {report.reason or 'None'}",
+        f"Mode: {run.request.mode}; horizon: {run.request.horizon}",
+        f"Market: {run.market.market_id}; currency: {run.market.currency}",
+        f"Market configuration: {run.market.configuration_version}; "
+        f"timezone: {run.market.timezone}",
+        f"Requested as-of cutoff: {run.request.requested_as_of.isoformat()}",
+        f"Sector: {run.request.sector or 'not requested'}; "
+        f"portfolio revision: {run.request.portfolio_revision or 'not requested'}",
+        "",
+        "## Analysis stages",
+        "",
+        "Indicators: NOT_RUN; setups: NOT_RUN; debate: NOT_RUN; verdict: NOT_RUN.",
+        "No recommendation has been generated.",
+        "",
+        "## Instruments and collection outcomes",
+        "",
+    ]
+    for instrument in data.instruments:
+        lines.append(
+            f"- {instrument.symbol} ({instrument.instrument_id}): "
+            f"{instrument.venue}, {instrument.quote_currency}"
+        )
+    for stage in data.collection_stages:
+        lines.append(
+            f"- Collection {stage.instrument_id or 'run'}: {stage.status}; "
+            f"{stage.reason or 'no failure reason'}"
+        )
+    lines.extend(["", "## History and source coverage", ""])
+    for route in run.market.routes:
+        if route.role in ("prices", "long_history_prices"):
+            lines.append(
+                f"- Configured {route.role} route: {route.provider}; "
+                f"feed {route.feed.feed_id} ({route.feed.kind}); "
+                f"venues {', '.join(route.feed.venues)}. Actual sources are listed per snapshot."
+            )
+    if not data.snapshots:
+        lines.append("- No trusted price snapshots were collected; data is unavailable.")
+    for requirement in run.request.history:
+        lines.append(
+            f"- Requested {requirement.timeframe}: {requirement.minimum_bars} minimum + "
+            f"{requirement.warmup_bars} warmup bars; adjustment {requirement.adjustment}; "
+            f"mandatory {requirement.mandatory}"
+        )
+    for plan in run.history_resolutions:
+        lines.append(
+            f"- {plan.venue} {plan.requirement.timeframe}: local sessions "
+            f"{plan.history_start} to {plan.session_date}; actual close cutoff "
+            f"{plan.session_cutoff}; calendar {plan.calendar.reference}/{plan.calendar.version}; "
+            f"policy {plan.policy.policy_version}; "
+            f"publication timing {plan.policy.publication_timing}; "
+            f"context {', '.join(plan.reasons) or 'none'}"
+        )
+    for snapshot in data.snapshots:
+        meta = snapshot.metadata
+        lines.append(
+            f"- Snapshot {meta.snapshot_id}, {meta.instrument.symbol} {meta.timeframe}: "
+            f"{meta.availability}; returned {meta.returned_bars}/{meta.requested_bars}; "
+            f"price basis {meta.adjustment}; feed {meta.feed.feed_id} ({meta.feed.kind}); "
+            f"venues {', '.join(meta.feed.venues)}; cutoff {meta.session_cutoff.isoformat()}"
+        )
+        lines.append(f"  Quality findings: {', '.join(meta.quality_flags) or 'none'}")
+        if meta.reason:
+            lines.append(f"  Reason: {meta.reason}")
+        for source in meta.sources:
+            lines.append(
+                f"  Source: {source.provider}/{source.provider_symbol}; "
+                f"sessions {source.session_start} to {source.session_end}; "
+                f"retrieved {source.retrieved_at.isoformat()}; SHA-256 {source.sha256}; "
+                f"reference {source.reference}"
+            )
+    for packet in data.packets:
+        for finding in packet.findings:
+            lines.append(
+                f"- {packet.metadata.snapshot_id}: {finding.severity} {finding.code}; "
+                f"row {finding.row}; session {finding.session}"
+            )
+    for rejection in (data.collection_manifest or {}).get("rejected_responses", []):
+        diagnostic = rejection["diagnostic"]
+        lines.append(
+            f"- Rejected response {diagnostic['snapshot_id']}: "
+            + ", ".join(f["code"] for f in diagnostic["findings"])
+        )
+    lines.extend(["", "## Coverage limits", ""])
+    lines.extend(f"- {issue}" for issue in data.evidence_issues)
+    lines.extend(
+        [
+            "- Coverage is limited to requested instruments, histories and declared feed venues.",
+            "- Source session intervals describe query windows, not proof of returned coverage.",
+            "- Partial or failed evidence is for inspection and cannot support a strategy.",
+            "- Synthetic fixtures do not establish live provider coverage or publication timing.",
+            "- Indicators, strategy evaluation and agent debate are unimplemented.",
+            "",
+            "Configured provider capabilities: "
+            + json.dumps(
+                [c.model_dump(mode="json") for c in run.market.capabilities], sort_keys=True
+            ),
+            "Benchmark mapping: "
+            + json.dumps(
+                [b.model_dump(mode="json") for b in run.market.benchmarks], sort_keys=True
+            ),
+            "Source version: " + json.dumps(run.source_version, sort_keys=True),
+            "Component versions: " + json.dumps(run.component_versions, sort_keys=True),
+            "",
+        ]
+    )
+    return "\n".join(lines).encode("utf-8")
+
+
+def render(data: ReportInput) -> dict[str, bytes]:
+    snapshot_ids = [str(s.metadata.snapshot_id) for s in data.snapshots]
+    common = {
+        "schema_version": data.schema_version,
+        "renderer_version": data.renderer_version,
+        "run_id": str(data.run_id),
+        "snapshot_ids": snapshot_ids,
+    }
+    files = {
+        "report.md": render_markdown(data),
+        "report.json": encode({**common, **data.model_dump(mode="json")}),
+    }
+    files["manifest.json"] = encode(
+        {
+            **common,
+            "status": data.report.status.value,
+            "availability": data.report.availability.value,
+            "report_input_sha256": hashlib.sha256(encode(data.model_dump(mode="json"))).hexdigest(),
+            "configuration": data.run.configuration,
+            "market": data.run.market.model_dump(mode="json"),
+            "source_version": data.run.source_version,
+            "component_versions": data.run.component_versions,
+            "snapshots": [s.model_dump(mode="json") for s in data.snapshots],
+            "collection_manifest": data.collection_manifest,
+            "rejected_responses": (data.collection_manifest or {}).get("rejected_responses", []),
+            "files": {
+                name: {"reference": name, "sha256": hashlib.sha256(content).hexdigest()}
+                for name, content in files.items()
+            },
+        }
+    )
+    return files
+
+
+class ReportService:
+    def __init__(self, database: Database, reports_dir: Path):
+        self.database = database
+        self.reports_dir = reports_dir.resolve()
+
+    def freeze(self, run_id: UUID) -> ReportInput:
+        with self.database.read() as repo:
+            try:
+                return repo.get_report_input(run_id)
+            except LookupError:
+                pass
+            run = repo.get_run(run_id)
+            if run.status in (OperationalStatus.NOT_RUN, OperationalStatus.RUNNING):
+                raise ValueError("Reporting requires a finished collection run")
+            snapshots = repo.list_snapshots(run_id)
+            stages = tuple(s for s in repo.list_stages(run_id) if s.name == "collection")
+            instruments = {
+                s.metadata.instrument.instrument_id: s.metadata.instrument for s in snapshots
+            }
+            for instrument_id in run.request.instrument_ids:
+                if instrument_id not in instruments:
+                    instruments[instrument_id] = repo.get_instrument(instrument_id)
+            artifacts = repo.list_artifacts(run_id)
+        packets, issues = [], []
+        for snapshot in snapshots:
+            try:
+                packet = EvidencePacket.model_validate_json(
+                    verified_bytes(snapshot.reference, snapshot.sha256)
+                )
+                if packet.metadata != snapshot.metadata:
+                    raise ValueError("Evidence metadata mismatch")
+                packets.append(packet)
+            except (OSError, ValueError):
+                issues.append(
+                    f"Evidence packet unavailable or invalid: {snapshot.metadata.snapshot_id}"
+                )
+        collection_manifest = None
+        for artifact in artifacts:
+            if artifact.name == "manifest.json" and artifact.status == "SAVED":
+                try:
+                    collection_manifest = json.loads(
+                        verified_bytes(artifact.reference, artifact.sha256)
+                    )
+                except (OSError, ValueError):
+                    issues.append(
+                        "Collection manifest unavailable or invalid; retained metadata shown"
+                    )
+        evidence = tuple(s.metadata for s in snapshots)
+        availability = DataAvailability.UNAVAILABLE
+        if any(e.returned_bars for e in evidence):
+            availability = DataAvailability.PARTIAL
+        if evidence and all(e.availability == DataAvailability.AVAILABLE for e in evidence):
+            try:
+                validate_request_coverage(run.request, evidence, ())
+                availability = DataAvailability.AVAILABLE
+            except ValueError:
+                pass
+        if issues and availability == DataAvailability.AVAILABLE:
+            availability = DataAvailability.PARTIAL
+        data = ReportInput(
+            run_id=run_id,
+            run=run,
+            report=DataReadinessReport(
+                run_id=run_id,
+                request=run.request,
+                status=run.status,
+                availability=availability,
+                evidence=evidence,
+                reason=run.reason,
+            ),
+            instruments=tuple(instruments.values()),
+            collection_stages=stages,
+            snapshots=snapshots,
+            packets=tuple(packets),
+            collection_manifest=collection_manifest,
+            evidence_issues=tuple(issues),
+        )
+        # Freeze redaction once, so later environment changes cannot change report bytes.
+        data = ReportInput.model_validate(redact_values(data.model_dump(mode="json")))
+        with self.database.write() as repo:
+            repo.put_report_input(data)
+        return data
+
+    def generate(self, run_id: UUID) -> tuple[ArtifactRecord, ...]:
+        data = self.freeze(run_id)
+        files = render(data)
+        with self.database.write() as repo:
+            existing = {a.name: a for a in repo.list_artifacts(run_id)}
+            directory = self.reports_dir / data.run.created_at.date().isoformat() / str(run_id)
+            if "report.md" in existing and Path(existing["report.md"].reference).is_absolute():
+                directory = Path(existing["report.md"].reference).parent
+            records = [
+                ArtifactRecord(
+                    artifact_id=existing[name].artifact_id
+                    if name in existing
+                    else uuid5(run_id, name),
+                    run_id=run_id,
+                    name=name,
+                    reference=str(directory / name),
+                )
+                for name in ARTIFACT_NAMES
+            ]
+            for record in records:
+                repo.put_artifact(record)
+        try:
+            for record in records:
+                path, content = Path(record.reference), files[record.name]
+                if not path.is_file() or path.read_bytes() != content:
+                    atomic_write(path, content)
+            # A saved batch means all three files exist and match, including on retries.
+            for record in records:
+                verified_bytes(record.reference, hashlib.sha256(files[record.name]).hexdigest())
+        except Exception:
+            reason = (
+                "Report write failed; retained analysis can be regenerated without recollection"
+            )
+            with self.database.write() as repo:
+                for record in records:
+                    repo.put_artifact(
+                        record.model_copy(update={"status": "FAILED", "reason": reason})
+                    )
+            raise ReportWriteError(
+                f"Report write failed for run {run_id}. "
+                f"Retry: stock-analyser report regenerate {run_id}"
+            ) from None
+        saved = []
+        with self.database.write() as repo:
+            for record in records:
+                digest = hashlib.sha256(files[record.name]).hexdigest()
+                previous = existing.get(record.name)
+                saved_at = (
+                    previous.saved_at
+                    if previous and previous.sha256 == digest and previous.saved_at
+                    else datetime.now(UTC)
+                )
+                artifact = ArtifactRecord.model_validate(
+                    record.model_dump()
+                    | {"status": "SAVED", "sha256": digest, "saved_at": saved_at}
+                )
+                repo.put_artifact(artifact)
+                saved.append(artifact)
+        return tuple(saved)
+
+    def show(self, run_id: UUID, name: Literal["report.md", "report.json"] = "report.md") -> str:
+        with self.database.read() as repo:
+            repo.get_run(run_id)
+            artifacts = {a.name: a for a in repo.list_artifacts(run_id)}
+        try:
+            if set(artifacts) != set(ARTIFACT_NAMES) or any(
+                a.status != "SAVED" for a in artifacts.values()
+            ):
+                raise ValueError("Incomplete report")
+            contents = {n: verified_bytes(a.reference, a.sha256) for n, a in artifacts.items()}
+            return contents[name].decode("utf-8")
+        except (OSError, ValueError):
+            raise ValueError(
+                "Report unavailable or incomplete. "
+                f"Retry: stock-analyser report regenerate {run_id}"
+            ) from None
