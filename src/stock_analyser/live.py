@@ -21,6 +21,13 @@ from stock_analyser.version import source_version
 
 def smoke_instrument(symbol: str, venue: str) -> Instrument:
     """Explicit smoke fixtures; not a universe/reference-data discovery service."""
+    # Known smoke symbols cover their public trading history. These identity
+    # bounds do not promise returned provider coverage (validated after fetching).
+    # References: docs/yfinance-evidence.md, "Smoke symbol history".
+    yfinance_start = {
+        ("AAPL", "XNAS"): date(1980, 12, 12),
+        ("SPY", "ARCX"): date(1993, 1, 29),
+    }.get((symbol, venue), date(2020, 1, 1))
     return Instrument(
         instrument_id=uuid5(NAMESPACE_URL, f"alphasnitch:live:US:{venue}:{symbol}"),
         security_id=uuid5(NAMESPACE_URL, f"alphasnitch:live:US:{symbol}"),
@@ -34,7 +41,7 @@ def smoke_instrument(symbol: str, venue: str) -> Instrument:
                 symbol=symbol,
                 effective_from=date(2020, 1, 1),
             ),
-            SymbolMapping(provider="yfinance", symbol=symbol, effective_from=date(2020, 1, 1)),
+            SymbolMapping(provider="yfinance", symbol=symbol, effective_from=yfinance_start),
         ),
     )
 

@@ -987,7 +987,16 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
 
 
 @pytest.mark.parametrize(
-    "scenario", ["complete", "short-benchmark", "transport-error", "massive-error", "unassessable"]
+    "scenario",
+    [
+        "complete",
+        "400-weeks",
+        "1000-weeks",
+        "short-benchmark",
+        "transport-error",
+        "massive-error",
+        "unassessable",
+    ],
 )
 def test_routed_prices_freeze_one_source_and_reopen_reports(
     database, tmp_path, monkeypatch, scenario
@@ -1084,7 +1093,7 @@ def test_routed_prices_freeze_one_source_and_reopen_reports(
         object(),
         requested=requested,
         routed=True,
-        weekly_bars=2 if scenario == "massive-error" else 260,
+        weekly_bars={"massive-error": 2, "400-weeks": 400, "1000-weeks": 1000}.get(scenario, 260),
     )
     expected_provider = "massive" if scenario == "massive-error" else "yfinance"
     assert calls == (
@@ -1116,9 +1125,14 @@ def test_routed_prices_freeze_one_source_and_reopen_reports(
             assert weekly["metadata"]["requested_bars"] == 260
             assert "INSUFFICIENT_HISTORY" in weekly["metadata"]["quality_flags"]
             assert not result["history_complete"]
-        if scenario == "complete":
+        if scenario in ("complete", "400-weeks", "1000-weeks"):
             assert result["history_complete"]
             assert len(data["packets"]) == 2
+            weekly = next(p for p in data["packets"] if p["metadata"]["timeframe"] == "weekly")
+            assert weekly["metadata"]["returned_bars"] == {
+                "400-weeks": 400,
+                "1000-weeks": 1000,
+            }.get(scenario, 260)
         # Reading/regenerating uses frozen evidence and never fetches again.
         before = list(calls)
         service.generate(run_id)

@@ -241,3 +241,20 @@ def test_new_provider_instance_refetches_instead_of_reusing_old_snapshots():
     for _ in range(2):
         adapter(ticker, (p,)).fetch(instrument, US_MARKET, p)
     assert len(ticker.calls) == 2
+
+
+@pytest.mark.parametrize("symbol,venue", [("AAPL", "XNAS"), ("SPY", "ARCX")])
+@pytest.mark.parametrize("weekly_bars", [400, 1000])
+def test_long_smoke_history_reaches_yfinance_for_both_timeframes(symbol, venue, weekly_bars):
+    plans = (plan(venue=venue), plan("weekly", weekly_bars, venue=venue))
+    assert plans[1].history_start < date(2020, 1, 1)
+    ticker = TickerFixture(frame_for(plans))
+    provider = adapter(ticker, plans)
+    instrument = smoke_instrument(symbol, venue)
+    for p in plans:  # Daily goes first and shares the long weekly request window.
+        response = provider.fetch(instrument, US_MARKET, p)
+        bars, findings, count = validate_prices(response, p)
+        assert count == len(bars) == p.requirement.required_bars
+        assert {f.code for f in findings} == {"PUBLICATION_UNVERIFIED"}
+    assert len(ticker.calls) == 1
+    assert ticker.calls[0]["start"] == plans[1].history_start.isoformat()

@@ -7,6 +7,17 @@ collection. Pass all stock and compatible benchmark history resolutions to
 The market configuration stays intact; the selected route is a separate frozen
 run input. Historical runs without this field retain their original primary route.
 
+## Smoke symbol history
+
+The explicit AAPL and SPY yfinance mappings begin at their public trading dates,
+covering the CLI's supported 1,000-week lookback at the October 2026 cutoff.
+Apple documents its [December 12, 1980 IPO](https://investor.apple.com/faq./default.aspx).
+NYSE documents SPY's [January 29, 1993 inaugural listing](https://ir.theice.com/press/news-details/2013/NYSE-Euronext-Celebrates-20-Years-of-Exchange-Traded-Product-ETP-Listing-and-Trading/default.aspx).
+These are explicit symbol-history bounds for the smoke listings, not assertions
+that Yahoo returns every requested session. Actual returned history still must
+pass per-listing validation. Other synthetic symbols retain their conservative
+2020 mapping bound; historical symbol changes are not inferred.
+
 Massive must have the requested timeframe capabilities, a sufficient configured
 history limit and an operator-verified inclusive coverage window with a reference.
 The router checks actual calendar windows, including minimum plus warmup bars.
