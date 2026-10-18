@@ -262,6 +262,14 @@ class Repositories:
             raise ValueError("Snapshot instrument version is not registered") from None
         if evidence.market != run.market:
             raise ValueError("Snapshot configuration differs from frozen run configuration")
+        if run.price_routing is not None:
+            route = run.price_routing.route
+            if (
+                route is None
+                or evidence.feed != route.feed
+                or any(source.provider != route.provider for source in evidence.sources)
+            ):
+                raise ValueError("Snapshot differs from frozen price routing decision")
         if evidence.session_cutoff > run.request.requested_as_of:
             raise ValueError("Snapshot cutoff exceeds requested cutoff")
         if run.history_resolutions:

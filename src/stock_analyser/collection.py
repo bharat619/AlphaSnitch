@@ -199,7 +199,11 @@ class CollectionService:
             return self._collect(run, instrument, provider)
         except Exception:
             # Do not put raw provider errors (which may contain credentials) into state.
-            reason = "Collection could not finish; inspect retained evidence and retry in a new run"
+            reason = (
+                run.price_routing.reason
+                if run.price_routing is not None and run.price_routing.route is None
+                else "Collection could not finish; inspect retained evidence and retry in a new run"
+            )
             with self.database.write() as repo:
                 repo.put_stage(
                     StageRecord(
@@ -219,6 +223,11 @@ class CollectionService:
         run_id = run.run_id
         snapshots = []
         rejected_responses = []
+        if run.price_routing is not None and run.price_routing.route is None:
+            raise ValueError(run.price_routing.reason)
+        route = (
+            run.price_routing.route if run.price_routing is not None else run.market.route("prices")
+        )
         for resolution in run.history_resolutions:
             if resolution.venue != instrument.venue:
                 continue
@@ -229,7 +238,6 @@ class CollectionService:
             directory = self.snapshots_dir / str(snapshot_id)
             raw_path = directory / "source.json"
             digest = immutable_write(raw_path, response.payload)
-            route = run.market.route("prices")
             provenance_findings = []
             if response.provider != route.provider:
                 provenance_findings.append(QualityFinding(code="PROVIDER_MISMATCH"))

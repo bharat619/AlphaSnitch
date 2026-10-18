@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from stock_analyser.markets import MarketRegistry
 from stock_analyser.massive import MassiveSettings
+from stock_analyser.routing import RoutingSettings
 
 
 class PathSettings(BaseModel):
@@ -29,6 +30,7 @@ class Settings(BaseModel):
 
     market: Literal["US"] = "US"
     massive: MassiveSettings = MassiveSettings()
+    price_routing: RoutingSettings = RoutingSettings()
     paths: PathSettings = PathSettings()
 
 
@@ -39,6 +41,7 @@ class ConfigurationError(ValueError):
 class Runtime(BaseModel):
     market: Literal["US"]
     massive: MassiveSettings = MassiveSettings()
+    price_routing: RoutingSettings = RoutingSettings()
     database_url: SecretStr | None = Field(default=None, exclude=True, repr=False)
     config_file: Path | None
     data_dir: Path
@@ -108,6 +111,7 @@ def load_runtime(
     return Runtime(
         market="US",
         massive=settings.massive,
+        price_routing=settings.price_routing,
         database_url=os.environ.get("STOCK_ANALYSER_DATABASE_URL") or None,
         config_file=path.resolve() if path.exists() else None,
         data_dir=root,

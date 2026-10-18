@@ -984,3 +984,176 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
                 assert len(raw["capability_observations"]) == 3
         service.generate(UUID(result["run_id"]))
         assert service.show(UUID(result["run_id"]), "report.json") == text
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "complete",
+        "400-weeks",
+        "1000-weeks",
+        "short-benchmark",
+        "transport-error",
+        "massive-error",
+        "unassessable",
+    ],
+)
+def test_routed_prices_freeze_one_source_and_reopen_reports(
+    database, tmp_path, monkeypatch, scenario
+):
+    import pandas as pd
+
+    from stock_analyser import live
+    from stock_analyser.calendars import ExchangeCalendarAdapter
+    from stock_analyser.config import load_runtime
+    from stock_analyser.markets import US_MARKET
+    from stock_analyser.reports import ReportService
+    from stock_analyser.routing import RoutingSettings, VerifiedCoverage
+    from stock_analyser.yfinance import YFinancePriceProvider
+
+    requested = datetime(2026, 10, 17, tzinfo=UTC)
+    calls = []
+
+    class Ticker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def history(self, **options):
+            calls.append(self.symbol)
+            if scenario == "transport-error":
+                raise OSError("private transport details")
+            sessions = ExchangeCalendarAdapter().schedule(
+                US_MARKET,
+                "XNAS",
+                date.fromisoformat(options["start"]),
+                date.fromisoformat(options["end"]) - timedelta(days=1),
+            )
+            if scenario == "short-benchmark" and self.symbol == "SPY":
+                sessions = sessions[-10:]
+            return pd.DataFrame(
+                {
+                    "Open": 10,
+                    "High": 12,
+                    "Low": 9,
+                    "Close": 11,
+                    "Volume": 1.5,
+                    "Dividends": 0.0,
+                    "Stock Splits": 0.0,
+                    "Adj Close": 10.5,
+                },
+                index=pd.DatetimeIndex([s.session for s in sessions]).tz_localize(
+                    "America/New_York"
+                ),
+            )
+
+        def get_history_metadata(self):
+            return {"currency": "USD", "exchangeTimezoneName": "America/New_York"}
+
+    import stock_analyser.yfinance as yf_adapter
+
+    monkeypatch.setattr(
+        yf_adapter,
+        "YFinancePriceProvider",
+        lambda plans: YFinancePriceProvider(
+            plans,
+            ticker_factory=Ticker,
+            clock=lambda: requested,
+        ),
+    )
+
+    class MassiveFailure:
+        def __init__(self, client):
+            pass
+
+        def fetch(self, *args):
+            calls.append("massive")
+            raise OSError("private transport details")
+
+    monkeypatch.setattr(live, "MassiveEvidenceProvider", MassiveFailure)
+    if scenario == "unassessable":
+        market = US_MARKET.model_copy(
+            update={
+                "configuration_version": "no-long-history-fixture",
+                "capabilities": tuple(
+                    c.model_copy(update={"weekly_prices": False}) for c in US_MARKET.capabilities
+                ),
+            }
+        )
+        monkeypatch.setattr(live, "US_MARKET", market)
+    database.initialize()
+    runtime = load_runtime(data_dir=tmp_path)
+    runtime.price_routing = RoutingSettings(
+        massive_coverage=VerifiedCoverage(
+            start=date(2024, 10, 17), end=date(2026, 10, 16), reference="controlled account fixture"
+        )
+    )
+    results = live.collect_smoke(
+        database,
+        runtime,
+        object(),
+        requested=requested,
+        routed=True,
+        weekly_bars={"massive-error": 2, "400-weeks": 400, "1000-weeks": 1000}.get(scenario, 260),
+    )
+    expected_provider = "massive" if scenario == "massive-error" else "yfinance"
+    assert calls == (
+        []
+        if scenario == "unassessable"
+        else ["massive", "massive"]
+        if scenario == "massive-error"
+        else ["AAPL", "SPY"]
+    )
+    service = ReportService(database, runtime.reports_dir)
+    for result in results:
+        run_id = UUID(result["run_id"])
+        saved = service.show(run_id, "report.json")
+        data = json.loads(saved)
+        decision = data["run"]["price_routing"]
+        if scenario == "unassessable":
+            assert decision["route"] is None
+            assert data["report"]["reason"].startswith("UNASSESSABLE")
+        else:
+            assert decision["route"]["provider"] == expected_provider
+        assert "routing policy history-routing-1" in service.show(run_id)
+        assert data["report"]["stages"]["verdict"] == "NOT_RUN"
+        assert data["report"]["availability"] != "AVAILABLE"  # Publication remains unverified.
+        assert "private transport details" not in saved
+        for packet in data["packets"]:
+            assert packet["metadata"]["sources"][0]["provider"] == expected_provider
+        if scenario == "short-benchmark" and result["symbol"] == "SPY":
+            weekly = next(p for p in data["packets"] if p["metadata"]["timeframe"] == "weekly")
+            assert weekly["metadata"]["requested_bars"] == 260
+            assert "INSUFFICIENT_HISTORY" in weekly["metadata"]["quality_flags"]
+            assert not result["history_complete"]
+        if scenario in ("complete", "400-weeks", "1000-weeks"):
+            assert result["history_complete"]
+            assert len(data["packets"]) == 2
+            weekly = next(p for p in data["packets"] if p["metadata"]["timeframe"] == "weekly")
+            assert weekly["metadata"]["returned_bars"] == {
+                "400-weeks": 400,
+                "1000-weeks": 1000,
+            }.get(scenario, 260)
+        # Reading/regenerating uses frozen evidence and never fetches again.
+        before = list(calls)
+        service.generate(run_id)
+        assert service.show(run_id, "report.json") == saved
+        assert calls == before
+    if scenario == "complete":
+        with database.read() as repo:
+            original = {
+                s.metadata.snapshot_id
+                for r in results
+                for s in repo.list_snapshots(UUID(r["run_id"]))
+            }
+        again = live.collect_smoke(
+            database, runtime, requested=requested, routed=True, weekly_bars=260
+        )
+        with database.read() as repo:
+            new = {
+                s.metadata.snapshot_id
+                for r in again
+                for s in repo.list_snapshots(UUID(r["run_id"]))
+            }
+        assert len(original) == len(new) == 4
+        assert not original.intersection(new)
+        assert calls == ["AAPL", "SPY", "AAPL", "SPY"]
