@@ -23,3 +23,11 @@ retries = 2
 max_requests = 100
 max_retry_delay_seconds = 120
 page_size = 50000
+
+[price_routing]
+# Default: no verified Massive entitlement, so attempt approved yfinance history.
+# Set only after verifying actual account coverage; dates are inclusive.
+# [price_routing.massive_coverage]
+# start = "2024-10-18"
+# end = "2026-10-16"
+# reference = "Local entitlement verification reference"

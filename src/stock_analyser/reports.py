@@ -119,6 +119,27 @@ def render_markdown(data: ReportInput) -> bytes:
             f"{stage.reason or 'no failure reason'}"
         )
     lines.extend(["", "## History and source coverage", ""])
+    if run.price_routing is not None:
+        selection = run.price_routing
+        lines.append(
+            f"- Selected provider: {selection.route.provider if selection.route else 'none'}; "
+            f"routing policy {selection.policy_version}; reason: {selection.reason}"
+        )
+        if selection.massive_coverage is not None:
+            coverage = selection.massive_coverage
+            lines.append(
+                f"- Verified Massive coverage: {coverage.start} to {coverage.end}; "
+                f"reference {coverage.reference}"
+            )
+        if selection.route is not None and selection.route.provider == "yfinance":
+            lines.append(
+                "- yfinance technical OHLC is split-adjusted; dividends are retained separately. "
+                "Auto-adjust, back-adjust, repair, and rounding are disabled. "
+                "Adjusted Close is retained for inspection; "
+                "it is not used as technical or total-return data. "
+                "Source labels require an aware exchange timezone; normalization uses "
+                f"{run.market.timezone}."
+            )
     for route in run.market.routes:
         if route.role in ("prices", "long_history_prices"):
             lines.append(

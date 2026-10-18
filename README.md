@@ -6,7 +6,7 @@ Local Python CLI foundation for AlphaSnitch, plus architecture and provider-eval
 
 Version 1 Pydantic contracts live in `stock_analyser.contracts`. Securities and listings have immutable UUID identities; provider symbols use half-open effective-date intervals. Instrument lookup requires a market and rejects ambiguous listings unless a venue is supplied. Frozen contracts use tuples for nested collections and reject unknown fields and unsupported schema versions.
 
-`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. The calendar adapter resolves these references using maintained, locked calendar data as described below. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. The Massive live adapter is described below; price-provider selection belongs to a later story.
+`MarketRegistry()` enables US only and supplies versioned calendar references, currency, provider routes, feed coverage, capabilities and benchmarks. The calendar adapter resolves these references using maintained, locked calendar data as described below. US history coverage describes the initial configured policy; it does not verify live entitlements. Provider protocols cover prices, universe, research, corporate actions, calendars and LLMs. The Massive live adapter and capability-based price routing are described below.
 
 Analysis requests require an aware as-of timestamp and explicit history requirements. Evidence retains the resolved market, instrument, currency, cutoff, provider symbol, feed and source hash. Every price source declares inclusive local session dates within its effective symbol mapping, allowing a snapshot to retain separate sources before and after a ticker rename. Any returned bars require provenance, including partial results, and price-history validation checks that sources cover every bar's session.
 
@@ -405,3 +405,55 @@ provider failures exit one.
 The adapter records transport observations, not subscription or billing claims.
 See [Massive evidence policy](docs/massive-evidence.md) for retained fields,
 normalization, and the publication-timing evidence still needed.
+
+### Route mandatory history to a capable source (US-008)
+
+`stock-analyser collect-prices` collects AAPL and the configured SPY benchmark
+with three daily and 260 mandatory weekly bars. Both listings and both timeframes
+use one provider selected before any network request. This is a data-readiness
+demonstration with explicit listing identities, not strategy or universe execution.
+
+```sh
+uv sync --locked
+uv run --locked stock-analyser collect-prices
+uv run --locked stock-analyser collect-prices --daily-bars 20 --weekly-bars 2
+```
+
+Configure `[price_routing.massive_coverage]` in TOML with inclusive `start`, `end`,
+and a nonempty verification `reference` as shown in `config.example.toml`.
+Massive is selected when the configured capabilities **and verified coverage**
+cover every mandatory stock/benchmark request, including warmup bars and the
+first daily constituent of each weekly bar. The existing 730-day capability is
+not evidence of account entitlement. Without verified coverage, or when a
+mandatory lookback exceeds it, the router chooses the approved yfinance route.
+Optional requirements do not trigger a switch. Only a selected Massive route
+loads its API key or acquires its provider lock.
+
+yfinance fetches one daily history frame per listing, validates actual returned
+history, and derives complete weeks using the exchange calendar. A missing
+constituent invalidates its weekly bar. Recent listings and short benchmark
+responses cannot silently shorten a mandatory requirement. Neither network
+errors nor invalid/insufficient results trigger a source switch. If no approved
+source can satisfy the configured requirements, collection saves failed,
+unavailable reports with an explicit `UNASSESSABLE` routing reason.
+
+Technical OHLC uses Yahoo's split-adjusted prices with dividend adjustment,
+back-adjustment, repair and rounding disabled. Dividends, splits and Adjusted
+Close are retained separately; Adjusted Close is never substituted for technical
+closes or represented as validated total-return data. The approved yfinance
+adapter supports `split` requests only. Details and upstream references are in
+[yfinance evidence policy](docs/yfinance-evidence.md).
+
+Reports freeze the routing reason, verified coverage, requested/returned history,
+feed, adjustment, quality findings and source hashes. Each invocation creates
+fresh run and snapshot IDs, including after a source-policy change; reports can
+be reopened or regenerated without refetching. Live publication timing remains
+unverified, so complete live histories still produce `PARTIAL` readiness and no
+strategy verdict. As with `collect-massive`, the command exits zero only when all
+history is complete and the sole blocking finding is `PUBLICATION_UNVERIFIED`.
+
+The credential-free capability and insufficient-history demonstration is:
+
+```sh
+uv run --locked pytest -q tests/test_price_routing.py
+```

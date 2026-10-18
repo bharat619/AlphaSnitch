@@ -15,6 +15,7 @@ from stock_analyser.contracts import (
     OperationalStatus,
     Text,
 )
+from stock_analyser.routing import PriceRoutingDecision
 
 
 class RunRecord(Contract):
@@ -25,6 +26,7 @@ class RunRecord(Contract):
     source_version: dict[str, object]
     component_versions: dict[str, str]
     history_resolutions: tuple[ResolvedHistory, ...] = ()
+    price_routing: PriceRoutingDecision | None = None
     status: OperationalStatus = OperationalStatus.NOT_RUN
     created_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -34,6 +36,16 @@ class RunRecord(Contract):
     def consistent_market(self) -> Self:
         if self.request.market_id != self.market.market_id:
             raise ValueError("Request and configuration markets differ")
+        if self.price_routing is not None:
+            route = self.price_routing.route
+            if route is not None and route not in self.market.routes:
+                raise ValueError("Selected price route is not approved for market")
+            if any(
+                p not in self.price_routing.mandatory_history
+                for p in self.history_resolutions
+                if p.requirement.mandatory
+            ):
+                raise ValueError("Routing decision omits mandatory run history")
         keys = [(r.venue, r.requirement.timeframe) for r in self.history_resolutions]
         if len(keys) != len(set(keys)):
             raise ValueError("Duplicate history resolutions")

@@ -385,3 +385,49 @@ def collect_massive(ctx: typer.Context) -> None:
     finally:
         if database is not None:
             database.close()
+
+
+@app.command("collect-prices")
+def collect_prices(
+    ctx: typer.Context,
+    daily_bars: int = typer.Option(3, min=1, max=10000),
+    weekly_bars: int = typer.Option(260, min=1, max=1000),
+) -> None:
+    """Collect AAPL/SPY using one capable approved source for mandatory history."""
+    from contextlib import ExitStack
+
+    from platformdirs import user_data_path
+
+    from stock_analyser.config import load_massive_key
+    from stock_analyser.live import collect_smoke
+    from stock_analyser.massive import live_client
+
+    database = None
+    try:
+        runtime = ctx.obj
+        with ExitStack() as stack:
+
+            def massive_client():
+                lock = user_data_path("stock-analyser", appauthor=False) / "massive.lock"
+                return stack.enter_context(live_client(load_massive_key(), runtime.massive, lock))
+
+            database = report_database(runtime)
+            database.initialize()
+            results = collect_smoke(
+                database,
+                runtime,
+                routed=True,
+                daily_bars=daily_bars,
+                weekly_bars=weekly_bars,
+                massive_client_factory=massive_client,
+            )
+        display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
+        if any(not r["history_complete"] or r["collection_stopped"] for r in results):
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database is not None:
+            database.close()
