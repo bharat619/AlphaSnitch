@@ -1,0 +1,36 @@
+{
+  "scope": "synthetic fixtures; disposable database removed after test",
+  "configuration_migrations_trade_confirmation_resume": "PASS",
+  "reports": [
+    {
+      "run_id": "35a9fd1d-2270-4882-af3e-0f49d226d458",
+      "mode": "buy",
+      "artifacts": {
+        "manifest.json": "f1296c231434416cecc06e0442ef6875c92fa1b51cfb5cb71af231ad03089c90",
+        "report.json": "3bd09ae22477581aad257996c48ea434592480a650299602cae75d2df597d2ba",
+        "report.md": "213444f4718e078bde76ea45f39a2f03e04a90c15affb2fdc4c7ba2022d5142c"
+      },
+      "fresh_process_reopen": true
+    },
+    {
+      "run_id": "2ee7d278-a797-4679-a38b-f3e65fc7ed3f",
+      "mode": "sell",
+      "artifacts": {
+        "manifest.json": "52bb37926d74ddc24662fe97ad387ef3b895d45ca7400a3103e29cad3634b4d9",
+        "report.json": "15bbc4827e107e8f2a3f9ba23f755a2aa6acdb5aa8351c56c67ff3b5ecf5f6a3",
+        "report.md": "ad6356a90c98cb7e3287e945994b6ba00d70225553d1505e1c32b69c5f92b6ac"
+      },
+      "fresh_process_reopen": true
+    },
+    {
+      "run_id": "27f1a648-b094-488d-b81c-05da240df5e1",
+      "mode": "sell",
+      "artifacts": {
+        "manifest.json": "8a1377919d9ad5a23db53c32d69e49749d0cb61aa9b9b9f447b18902e19e4add",
+        "report.json": "7bbcdf85028605ab69c98935884114feefe3063e851863b20c86780c6afba181",
+        "report.md": "39fd8c116409935233a1a1ddcbc2ab3492bd53503b0689f93b08d0a19e90fe78"
+      },
+      "fresh_process_reopen": true
+    }
+  ]
+}

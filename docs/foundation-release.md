@@ -5,6 +5,13 @@ offline executions. Indicators, setups, debate and verdict remain `NOT_RUN`.
 Passing fixtures establishes reproducibility of the implemented contracts, not
 recommendation capability or production reliability. US is the only public market.
 
+The [2026-10-24 clean-checkout acceptance evidence](evidence/foundation-release-2026-10-24.json)
+records **470 passed, zero skipped/failures/errors** at source `ff27dc3` with a clean
+tracked tree after successful `uv sync --locked` into a new local clone. The
+[fresh-process reopen evidence](evidence/foundation-reopen-2026-10-24.json) retains
+the three fixture runs and artifact hashes. Ruff lint and formatting checks passed.
+Live checks were not invoked for this record; pilot coverage remains failed.
+
 **Release milestone remains blocked by pilot-sector coverage.** The existing
 [observed qualification](evidence/technology-universe-2026-10-24.json) fails
 classification completeness, cross-source identity mapping, history/liquidity
