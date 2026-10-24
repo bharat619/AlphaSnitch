@@ -137,6 +137,46 @@ def render_markdown(data: ReportInput) -> bytes:
             f"- Collection {stage.instrument_id or 'run'}: {stage.status}; "
             f"{stage.reason or 'no failure reason'}"
         )
+    sell = run.configuration.get("sell_collection")
+    if sell:
+        lines.extend(
+            [
+                "",
+                "## Frozen open holdings",
+                "",
+                f"Selection: {sell['selection_outcome']}; "
+                f"selected revision: {sell['selected_revision']}",
+                f"Observed revision: {sell['observed_revision']}; "
+                f"portfolio changed: {sell['portfolio_changed']}",
+                str(sell["revision_check"]),
+                "Scans never mutate holdings or trades. SELL/HOLD verdicts: NOT_RUN.",
+            ]
+        )
+        for holding in sell["holdings"]:
+            identity, position = holding["instrument"], holding["position"]
+            lines.append(
+                f"- {identity['symbol']} ({identity['instrument_id']}), {identity['venue']}, "
+                f"{position['currency']}: quantity {position['quantity']}; "
+                f"cost basis {position['cost_basis']}; "
+                "market value unavailable at selection."
+            )
+            if position["reconciliation_required"]:
+                lines.append(
+                    "  Reconciliation required: " + ", ".join(position["reconciliation_required"])
+                )
+            for lot in position["lots"]:
+                lines.append(
+                    f"  Lot {lot['execution_id']}: remaining quantity {lot['quantity']}; "
+                    f"cost basis {lot['cost_basis']} {position['currency']}"
+                )
+            for entry in holding["entries"]:
+                trade = entry["confirmation"]
+                lines.append(
+                    f"  Entry {entry['execution_id']}: {trade['executed_at']}; "
+                    f"price {trade['price']} {trade['currency']}; "
+                    f"recommendation {trade['recommendation_id'] or 'unavailable'}; "
+                    f"run {trade['run_id'] or 'unavailable'}. {entry['context_status']}"
+                )
     buy = run.configuration.get("buy_collection")
     if buy:
         lines.extend(
@@ -331,6 +371,14 @@ class ReportService:
             for instrument_id in run.request.instrument_ids:
                 if instrument_id not in instruments:
                     instruments[instrument_id] = repo.get_instrument(instrument_id)
+            sell = run.configuration.get("sell_collection")
+            if sell:
+                # Failed collections have no snapshot identity; preserve the identity
+                # frozen with the selected portfolio instead of relabeling it later.
+                instruments = {
+                    i.instrument_id: i
+                    for i in (Instrument.model_validate(h["instrument"]) for h in sell["holdings"])
+                }
             artifacts = repo.list_artifacts(run_id)
             research = repo.research_for_report(run)
         packets, issues = [], []

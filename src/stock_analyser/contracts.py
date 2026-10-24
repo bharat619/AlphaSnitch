@@ -200,7 +200,7 @@ class AnalysisRequest(Contract):
 
     @model_validator(mode="after")
     def valid_scope(self) -> Self:
-        if bool(self.instrument_ids) == (self.sector is not None):
+        if self.mode == "buy" and bool(self.instrument_ids) == (self.sector is not None):
             raise ValueError("Specify exactly one of instruments or sector")
         if len(set(self.instrument_ids)) != len(self.instrument_ids):
             raise ValueError("Duplicate instrument IDs")

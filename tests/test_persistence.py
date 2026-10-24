@@ -2316,3 +2316,288 @@ def test_ledger_invalid_backdated_split_and_corrected_sale_are_atomic(database):
         )
     assert portfolio_revision(database) == revision
     assert len(ledger_history(database)) == 2
+
+
+@pytest.mark.parametrize("scenario,count", [("one-holding-failure", 12), ("valid", 0)])
+def test_sell_cli_all_open_holdings(database, tmp_path, monkeypatch, scenario, count):
+    from stock_analyser.ledger import TradeConfirmation, portfolio_state, record_execution
+    from stock_analyser.reports import ReportService
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, _ = fixture_request(tmp_path / "inputs")
+    instruments = {r.metadata.instrument.symbol: r.metadata.instrument for r in request.histories}
+    selected = [instruments[f"TECH{i:02}"] for i in range(11)] + [instruments["ILLIQUID"]]
+    for index, instrument in enumerate(selected[:count]):
+        with database.write() as repo:
+            repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
+            repo.put_instrument(instrument)
+        record_execution(
+            database,
+            TradeConfirmation(
+                instrument_id=instrument.instrument_id,
+                venue=instrument.venue,
+                side="BUY",
+                quantity="2",
+                price="10",
+                currency="USD",
+                executed_at=datetime(2026, 10, 1, tzinfo=UTC),
+                idempotency_key=f"sell-demo-{index}",
+            ),
+        )
+    if count:
+        # Closed and foreign-market positions do not enter the active market scan.
+        closed = selected[0].model_copy(
+            update={"instrument_id": uuid4(), "security_id": uuid4(), "symbol": "CLOSED"}
+        )
+        foreign = closed.model_copy(
+            update={
+                "instrument_id": uuid4(),
+                "security_id": uuid4(),
+                "market_id": "CA",
+                "symbol": "FOREIGN",
+                "quote_currency": "CAD",
+            }
+        )
+        for instrument in (closed, foreign):
+            with database.write() as repo:
+                repo.put_security(
+                    Security(security_id=instrument.security_id, name=instrument.symbol)
+                )
+                repo.put_instrument(instrument)
+            trade = TradeConfirmation(
+                instrument_id=instrument.instrument_id,
+                venue=instrument.venue,
+                side="BUY",
+                quantity="1",
+                price="10",
+                currency=instrument.quote_currency,
+                executed_at=datetime(2026, 10, 1, tzinfo=UTC),
+                idempotency_key=instrument.symbol,
+            )
+            record_execution(database, trade)
+            if instrument == closed:
+                record_execution(
+                    database,
+                    trade.model_copy(
+                        update={
+                            "side": "SELL",
+                            "executed_at": datetime(2026, 10, 2, tzinfo=UTC),
+                            "idempotency_key": "close-ETF",
+                        }
+                    ),
+                )
+    before = portfolio_state(database)
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(
+        app, ["--data-dir", str(tmp_path), "scan", "sell", "--fixture", scenario]
+    )
+    assert result.exit_code == (1 if count else 0), result.output
+    assert portfolio_state(database) == before
+    with database.read() as repo:
+        parent = next(r for r in repo.list_runs(100) if "sell_collection" in r.configuration)
+        stages = repo.list_stages(parent.run_id)
+    service = ReportService(database, tmp_path / "reports")
+    data = json.loads(service.show(parent.run_id, "report.json"))
+    markdown = service.show(parent.run_id)
+    scope = data["run"]["configuration"]["sell_collection"]
+    assert len(data["instruments"]) == len(stages) == len(scope["holdings"]) == count
+    assert parent.request.portfolio_revision == before[1]
+    assert scope["portfolio_changed"] is False
+    assert len([s for s in stages if s.status == OperationalStatus.FAILED]) == (1 if count else 0)
+    assert data["report"]["stages"]["verdict"] == "NOT_RUN"
+    for holding in scope["holdings"]:
+        assert holding["position"]["quantity"] == "2"
+        assert holding["position"]["lots"][0]["quantity"] == "2"
+        assert holding["entries"][0]["entry_thesis"] is None
+        assert holding["entries"][0]["invalidation"] is None
+        assert holding["exposure"]["cost_basis"] == "20"
+        assert holding["instrument"]["symbol"] in markdown
+    assert ("ILLIQUID" in markdown) if count else ("EMPTY_PORTFOLIO" in markdown)
+    assert "FOREIGN" not in markdown
+    assert "CLOSED (" not in markdown
+    service.generate(parent.run_id)
+    assert service.show(parent.run_id) == markdown
+
+
+def test_sell_scan_freezes_revision_and_shared_provider(database, tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.ledger import (
+        Correction,
+        TradeConfirmation,
+        freeze_open_holdings,
+        portfolio_state,
+        record_execution,
+        record_ledger_event,
+    )
+    from stock_analyser.sell import SellEvidence, collect_sell
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs")
+    selected = list(
+        {
+            r.metadata.instrument.instrument_id: r.metadata.instrument for r in request.histories
+        }.values()
+    )[:3]
+    receipts = []
+    for index, instrument in enumerate(selected):
+        with database.write() as repo:
+            repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
+            repo.put_instrument(instrument)
+        receipts.append(
+            record_execution(
+                database,
+                TradeConfirmation(
+                    instrument_id=instrument.instrument_id,
+                    venue=instrument.venue,
+                    side="BUY",
+                    quantity="2",
+                    price="10",
+                    currency="USD",
+                    executed_at=datetime(2026, 10, 1, tzinfo=UTC),
+                    idempotency_key=f"freeze-{index}",
+                    recommendation_id="entry-link",
+                ),
+            )
+        )
+    original = receipts[0]
+    corrected = original.confirmation.model_copy(
+        update={"price": Decimal("12"), "recommendation_id": "corrected-link"}
+    )
+    record_ledger_event(
+        database,
+        Correction(
+            target_execution_id=original.execution_id,
+            replacement=corrected,
+            reason="Correct entry context",
+            idempotency_key="context-correction",
+        ),
+    )
+    before = portfolio_state(database)
+    frozen, revision = freeze_open_holdings(database, "US")
+    assert frozen[0]["entries"][0]["confirmation"]["recommendation_id"] == "corrected-link"
+    active = peak = 0
+    gate = threading.Lock()
+    changed = False
+
+    class ObservedProvider(RawFixtureProvider):
+        def fetch(self, instrument, market, resolution):
+            nonlocal active, peak, changed
+            with gate:
+                active += 1
+                peak = max(peak, active)
+            try:
+                if not changed:
+                    changed = True
+                    record_execution(
+                        database,
+                        original.confirmation.model_copy(
+                            update={"idempotency_key": "concurrent-buy", "quantity": Decimal("1")}
+                        ),
+                    )
+                time.sleep(0.01)
+                return super().fetch(instrument, market, resolution)
+            finally:
+                with gate:
+                    active -= 1
+
+    runtime = load_runtime(data_dir=tmp_path)
+    evidence = SellEvidence(
+        market=request.market,
+        requested_as_of=request.requested_as_of,
+        history=request.policy.requirements(),
+        cutoff_policy=request.cutoff_policy,
+    )
+    run_id, status, _ = collect_sell(
+        database, runtime, evidence, ObservedProvider(), history_resolver=resolver
+    )
+    assert status == OperationalStatus.SUCCEEDED
+    assert peak == 1
+    with database.read() as repo:
+        run = repo.get_run(run_id)
+    scope = run.configuration["sell_collection"]
+    assert run.request.portfolio_revision == revision == before[1]
+    assert scope["portfolio_changed"] is True
+    assert scope["holdings"] == frozen
+    assert "portfolio changed after selection" in run.reason
+    assert portfolio_state(database)[0][0].quantity == Decimal("3")
+
+
+def test_sell_rejects_unsupported_public_market(database, tmp_path):
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.sell import SellEvidence, collect_sell
+    from stock_analyser.universe_demo import fixture_request
+
+    request, resolver = fixture_request(tmp_path / "inputs")
+    evidence = SellEvidence(
+        market=request.market.model_copy(update={"market_id": "CA"}),
+        requested_as_of=request.requested_as_of,
+        history=request.policy.requirements(),
+    )
+    with pytest.raises(ValueError, match="Unsupported market"):
+        collect_sell(
+            database,
+            load_runtime(data_dir=tmp_path),
+            evidence,
+            RawFixtureProvider(),
+            history_resolver=resolver,
+        )
+
+
+def test_sell_retains_holding_without_supported_collection_context(database, tmp_path):
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.ledger import TradeConfirmation, portfolio_state, record_execution
+    from stock_analyser.reports import ReportService
+    from stock_analyser.sell import SellEvidence, collect_sell
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs")
+    instrument = request.histories[0].metadata.instrument.model_copy(
+        update={"venue": "OTC", "quote_currency": "CAD", "symbol": "UNSUPPORTED"}
+    )
+    with database.write() as repo:
+        repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
+        repo.put_instrument(instrument)
+    record_execution(
+        database,
+        TradeConfirmation(
+            instrument_id=instrument.instrument_id,
+            venue="OTC",
+            side="BUY",
+            quantity="1",
+            price="10",
+            currency="CAD",
+            executed_at=datetime(2026, 10, 1, tzinfo=UTC),
+            idempotency_key="unsupported-holding",
+        ),
+    )
+    before = portfolio_state(database)
+    evidence = SellEvidence(
+        market=request.market,
+        requested_as_of=request.requested_as_of,
+        history=request.policy.requirements(),
+        cutoff_policy=request.cutoff_policy,
+    )
+    run_id, status, _ = collect_sell(
+        database,
+        load_runtime(data_dir=tmp_path),
+        evidence,
+        RawFixtureProvider(),
+        history_resolver=resolver,
+    )
+    assert status == OperationalStatus.PARTIAL
+    report = json.loads(ReportService(database, tmp_path / "reports").show(run_id, "report.json"))
+    assert report["instruments"][0]["quote_currency"] == "CAD"
+    assert report["instruments"][0]["venue"] == "OTC"
+    assert report["collection_stages"][0]["status"] == "FAILED"
+    assert portfolio_state(database) == before

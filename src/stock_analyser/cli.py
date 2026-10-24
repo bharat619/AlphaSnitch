@@ -110,6 +110,79 @@ def scan_buy(
         raise typer.Exit(1)
 
 
+def run_sell(runtime, input_path=None, fixture=None):
+    from uuid import uuid4
+
+    from stock_analyser.buy import FrozenPriceProvider
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.sell import SellEvidence, collect_sell
+
+    if (input_path is None) == (fixture is None):
+        raise ValueError(
+            "Choose --input frozen-sell-evidence.json or --fixture valid/one-holding-failure"
+        )
+    resolver = None
+    if fixture is not None:
+        if fixture not in ("valid", "one-holding-failure"):
+            raise ValueError("Unknown sell fixture scenario")
+        from stock_analyser.universe_demo import fixture_request
+
+        request, resolver = fixture_request(runtime.snapshots_dir / "sell-fixtures" / str(uuid4()))
+        evidence = SellEvidence(
+            market=request.market,
+            requested_as_of=request.requested_as_of,
+            history=request.policy.requirements(),
+            cutoff_policy=request.cutoff_policy,
+        )
+
+        class SellFixtureProvider(RawFixtureProvider):
+            failed_id = None
+
+            def fetch(self, instrument, market, resolution):
+                if fixture == "one-holding-failure":
+                    if self.failed_id is None:
+                        self.failed_id = instrument.instrument_id
+                    if instrument.instrument_id == self.failed_id:
+                        raise ConnectionError("Synthetic holding collection failure")
+                return super().fetch(instrument, market, resolution)
+
+        provider = SellFixtureProvider()
+    else:
+        evidence = SellEvidence.model_validate_json(input_path.read_bytes())
+        provider = FrozenPriceProvider(evidence.histories)
+    database = report_database(runtime)
+    try:
+        database.initialize()
+        run_id, status, artifacts = collect_sell(
+            database, runtime, evidence, provider, history_resolver=resolver, progress=display
+        )
+        display(f"Run: {run_id}; collection: {status.value}; report saved")
+        for artifact in artifacts:
+            display(f"{artifact.name}: {artifact.reference}")
+        return status
+    finally:
+        database.close()
+
+
+@scan_app.command("sell")
+def scan_sell(
+    ctx: typer.Context,
+    input_path: Path | None = typer.Option(
+        None, "--input", help="Frozen SellEvidence JSON; holdings come from the ledger."
+    ),
+    fixture: str | None = typer.Option(
+        None, help="Synthetic evidence: valid or one-holding-failure; never creates trades."
+    ),
+) -> None:
+    """Collect evidence for every open holding at one frozen portfolio revision."""
+    try:
+        status = run_sell(ctx.obj, input_path, fixture)
+    except Exception as exc:
+        fail(exc)
+    if status.value != "SUCCEEDED":
+        raise typer.Exit(1)
+
+
 def display_universe(snapshot) -> None:
     result = snapshot.result
     display(f"Universe snapshot: {snapshot.snapshot_id}")
@@ -212,7 +285,7 @@ def universe_replay(
 def workflow_label(name: str) -> str:
     return (
         name
-        if name in ("Buy", "Reports", "Portfolio", "Record offline trade")
+        if name in ("Buy", "Sell", "Reports", "Portfolio", "Record offline trade")
         else f"{name} [unavailable — not implemented]"
     )
 
@@ -279,6 +352,23 @@ def menu(runtime: Runtime) -> None:
                     run_buy(
                         runtime,
                         sector,
+                        None if source in scenarios else Path(source),
+                        source if source in scenarios else None,
+                    )
+                except EOFError:
+                    return
+                except Exception as exc:
+                    display(f"Error: {safe_error(exc)}")
+            elif choice == "2":
+                try:
+                    source = Prompt.ask(
+                        "Frozen sell evidence JSON path or fixture scenario "
+                        "(valid/one-holding-failure)",
+                        console=console,
+                    )
+                    scenarios = {"valid", "one-holding-failure"}
+                    run_sell(
+                        runtime,
                         None if source in scenarios else Path(source),
                         source if source in scenarios else None,
                     )
