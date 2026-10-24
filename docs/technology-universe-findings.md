@@ -14,6 +14,11 @@ untracked planning files. The implementation hash was verified against the
 committed module before saving this artifact. No provider payloads or credentials
 are committed.
 
+This artifact predates the alternate-listing reconciliation fix. Its implementation
+hash identifies that earlier code, not the current module. The saved observation
+had no eligible duplicate listings, so this fix does not change its coverage counts;
+the historical JSON remains unmodified.
+
 ## Measured checks
 
 - **PASS — Massive enumeration:** 13,260 unique active US stock records in 14

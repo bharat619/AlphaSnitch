@@ -207,6 +207,43 @@ def test_dedup_preserves_share_classes_and_blocks_identity_conflicts():
     )
 
 
+@pytest.mark.parametrize("symbols", [["ALT"], ["AAA"], ["AAA", "ALT"]])
+def test_discovery_matches_all_eligible_listings_and_counts_distinct_securities(symbols):
+    rows = [
+        reference(),
+        reference("ALT", share_class_figi="share-AAA", primary_exchange="XNYS"),
+        reference("CLASSB"),
+    ]
+    result = reconcile(
+        Enumeration("massive", {}, rows=rows),
+        Enumeration("yfinance", {}, rows=[{"symbol": symbol} for symbol in symbols]),
+    )
+    assert result["eligible_listings_before_dedup"] == 3
+    assert result["distinct_candidate_securities"] == 2
+    assert result["duplicate_listings_removed"] == 1
+    assert result["discovery_exact_symbol_matches"] == len(symbols)
+    assert result["discovery_unmatched_symbols"] == 0
+    assert result["discovery_eligible_security_matches"] == 1
+    assert result["eligible_securities_outside_discovery"] == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"active": False}, {"composite_figi": "listing-AAA"}],
+)
+def test_discovery_cannot_match_an_excluded_alternate_listing(overrides):
+    rows = [reference(), reference("ALT", share_class_figi="share-AAA", **overrides)]
+    result = reconcile(
+        Enumeration("massive", {}, rows=rows),
+        Enumeration("yfinance", {}, rows=[{"symbol": "ALT"}]),
+    )
+    assert result["discovery_exact_symbol_matches"] == 1
+    assert result["discovery_eligible_security_matches"] == 0
+    assert (
+        result["eligible_securities_outside_discovery"] == result["distinct_candidate_securities"]
+    )
+
+
 def test_saved_evidence_never_promotes_a_sample_or_leaks_payloads(client_factory, tmp_path):
     output = tmp_path / "findings"
     with client_factory([{"results": [reference(secret="secret-payload")]}]) as (client, _):
@@ -237,6 +274,26 @@ def test_workload_prices_every_candidate_and_keeps_replay_separate():
     assert estimate["warm_after_metadata_ttl"] == 4749
     assert estimate["warm_exact_snapshot_replay"] == 0
     assert estimate["cold_upper_scenario_two_retries_and_three_pages"] == 9 * 4749
+
+
+def test_workload_and_currency_checks_follow_policy(monkeypatch):
+    monkeypatch.setitem(POLICY, "selection_count", 3)
+    monkeypatch.setitem(POLICY, "currency", "CAD")
+    monkeypatch.setitem(POLICY, "minimum_completed_daily_bars", 300)
+    monkeypatch.setitem(POLICY, "metadata_ttl_hours", 48)
+    estimate = estimate_workload(
+        reference_pages=12, discovery_pages=4, candidate_securities=4000, sector_candidates=700
+    )
+    assert estimate["inputs"]["selected"] == 3
+    assert estimate["cold_start"] == 4728
+    assert estimate["warm_next_session_metadata_fresh"] == 712
+    assert estimate["warm_after_metadata_ttl"] == 4728
+    assert estimate["cold_upper_scenario_two_retries_and_three_pages"] == 9 * 4728
+    assumptions = "\n".join(estimate["assumptions"])
+    assert "selected 3" in assumptions and "3 selections" in assumptions
+    assert "300 daily bars" in assumptions and "Metadata TTL 48h" in assumptions
+    assert reference_exclusions(reference(currency_name="cad")) == []
+    assert "NON_CAD_OR_UNKNOWN_CURRENCY" in reference_exclusions(reference())
 
 
 @pytest.mark.parametrize("sector", ["Unfamiliar", "", None, True])

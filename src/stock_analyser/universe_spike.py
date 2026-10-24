@@ -230,7 +230,8 @@ def reference_exclusions(row: dict) -> list[str]:
         "NOT_US_STOCK": row.get("market") == "stocks" and row.get("locale") == "us",
         "NON_COMMON_OR_UNKNOWN_TYPE": row.get("type") == POLICY["eligible_type"],
         "UNSUPPORTED_OR_UNKNOWN_VENUE": row.get("primary_exchange") in POLICY["venues"],
-        "NON_USD_OR_UNKNOWN_CURRENCY": row.get("currency_name", "").upper() == "USD"
+        f"NON_{POLICY['currency']}_OR_UNKNOWN_CURRENCY": row.get("currency_name", "").upper()
+        == POLICY["currency"]
         if isinstance(row.get("currency_name"), str)
         else False,
         "UNKNOWN_SECURITY_IDENTITY": bool((row.get("share_class_figi") or "").strip()),
@@ -269,8 +270,12 @@ def reconcile(reference: Enumeration, discovery: Enumeration) -> dict:
         for group in groups.values()
     ]
     reference_symbols = {row["ticker"] for row in reference.rows}
-    eligible_symbols = {row["ticker"] for row in listings}
+    eligible_symbol_to_security = {row["ticker"]: row["share_class_figi"] for row in eligible}
     discovered = {row["symbol"] for row in discovery.rows}
+    discovered_securities = {
+        eligible_symbol_to_security[symbol]
+        for symbol in discovered & eligible_symbol_to_security.keys()
+    }
     return {
         "reference_exclusions": dict(sorted(exclusions.items())),
         "exclusion_counts_overlap": True,
@@ -279,8 +284,8 @@ def reconcile(reference: Enumeration, discovery: Enumeration) -> dict:
         "duplicate_listings_removed": len(eligible) - len(listings),
         "discovery_exact_symbol_matches": len(discovered & reference_symbols),
         "discovery_unmatched_symbols": len(discovered - reference_symbols),
-        "discovery_eligible_security_matches": len(discovered & eligible_symbols),
-        "eligible_securities_outside_discovery": len(eligible_symbols - discovered),
+        "discovery_eligible_security_matches": len(discovered_securities),
+        "eligible_securities_outside_discovery": len(groups.keys() - discovered_securities),
         "classification_completeness": "UNVERIFIED; absence from discovery is not non-Technology",
         "symbol_mapping": "Exact only; punctuation, rename and venue differences need verification",
     }
@@ -294,7 +299,8 @@ def estimate_workload(
         raise ValueError("Workload inputs must be nonnegative")
     metadata = reference_pages + discovery_pages + candidate_securities
     prices = sector_candidates + 1  # one daily union per candidate + SPY benchmark
-    research = 2 * 11 + 10  # splits/dividends for ten + benchmark, news for ten
+    selected = POLICY["selection_count"]
+    research = 2 * (selected + 1) + selected  # splits/dividends + benchmark, selected news
     return {
         "kind": "estimate_only",
         "unit": "logical provider calls; SDK HTTP amplification unknown",
@@ -303,7 +309,7 @@ def estimate_workload(
             "discovery_pages": discovery_pages,
             "candidate_securities": candidate_securities,
             "sector_candidates": sector_candidates,
-            "selected": 10,
+            "selected": selected,
             "benchmark": 1,
             "profile_calls_per_candidate": 1,
             "price_pages_per_candidate": 1,
@@ -317,12 +323,14 @@ def estimate_workload(
         "cold_upper_scenario_two_retries_and_three_pages": 9 * (metadata + prices + research),
         "assumptions": [
             "All candidate securities need classification, not only discovery matches",
-            "Every sector candidate refreshes for ranking, not only the selected ten",
-            "260 daily bars plus independently resolved mandatory weekly warmup",
+            f"Every sector candidate refreshes for ranking, not only the selected {selected}",
+            f"{POLICY['minimum_completed_daily_bars']} daily bars plus independently resolved "
+            "mandatory weekly warmup",
             "One daily union-history call; valid only if chosen source covers the window",
-            "Actions/news estimate assumes ten selections; zero forward-earnings coverage",
+            f"Actions/news estimate assumes {selected} selections; zero forward-earnings coverage",
             "No failed calls, retries, paging, or SDK authentication in base estimates",
-            "Metadata TTL 24h; warm price refresh includes five overlapping sessions",
+            f"Metadata TTL {POLICY['metadata_ttl_hours']}h; "
+            "warm price refresh includes five overlapping sessions",
         ],
     }
 

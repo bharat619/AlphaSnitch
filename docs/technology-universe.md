@@ -72,6 +72,8 @@ not demonstrated profitable rules.
   composite FIGI and provider ticker ascending. The later selection workflow must
   bind these identifiers to immutable security/instrument UUIDs and effective
   symbol intervals. It must not mint a new identity on each ticker rename.
+  Discovery coverage matches exact symbols against every eligible listing and
+  counts distinct share-class FIGIs, including matches on alternate listings.
 - **Taxonomy:** `yahoo-sector-map-1` maps exact Yahoo sector `Technology` to
   application sector `technology`. Other known Yahoo sectors are outside this
   scope; missing, unfamiliar or conflicting classification is unknown and blocks
