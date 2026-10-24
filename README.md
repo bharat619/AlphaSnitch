@@ -1,5 +1,10 @@
 # Stock market analyser
 
+The [foundation release checklist and operations guide](docs/foundation-release.md)
+provides clean-checkout acceptance, fresh-process report reopen, bounded opt-in
+live checks, recovery instructions and release limitations. Fixture readiness is
+separate from live readiness; the milestone remains blocked by pilot-sector coverage.
+
 Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. [US-005](https://github.com/bharat619/AlphaSnitch/issues/5) freezes and validates fixture evidence; [US-006](https://github.com/bharat619/AlphaSnitch/issues/6) saves, reopens and regenerates data-readiness reports. The menu includes prototype Buy collection, open-holdings Sell collection, Portfolio, Record offline trade, and Reports. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
 ## Market-aware contracts (US-002)

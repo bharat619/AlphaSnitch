@@ -68,6 +68,152 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
 
 
+def test_foundation_release_fresh_process_checklist(database, tmp_path):
+    """Configuration, migration, buy/trade/sell, interrupted resume and offline reopen."""
+    import hashlib
+
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.ledger import TradeConfirmation, portfolio_state
+    from stock_analyser.sell import SellEvidence, collect_sell
+    from stock_analyser.universe_demo import fixture_request
+
+    config = tmp_path / "config.toml"
+    config.write_text('market = "US"\nstock_concurrency = 1\n')
+    runtime_dir = tmp_path / "runtime"
+    # Run away from the checkout so optional .env files cannot configure the demo.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("STOCK_ANALYSER_")}
+    env.update(
+        STOCK_ANALYSER_DATABASE_URL=database.engine.url.render_as_string(hide_password=False),
+        NO_COLOR="1",
+        TERM="dumb",
+        COLUMNS="240",
+    )
+    prefix = [
+        sys.executable,
+        "-m",
+        "stock_analyser",
+        "--config",
+        str(config),
+        "--data-dir",
+        str(runtime_dir),
+    ]
+
+    def cli(*args, confirmation=None):
+        result = subprocess.run(
+            [*prefix, *map(str, args)],
+            cwd=tmp_path,
+            env=env,
+            input=confirmation,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout
+
+    doctor = json.loads(cli("doctor"))
+    assert doctor["offline_ready"] is True
+    cli("init")
+    cli("init")
+    cli("scan", "buy", "--sector", "technology", "--fixture", "shortfall")
+    with database.read() as repo:
+        buy = next(r for r in repo.list_runs(100) if "buy_collection" in r.configuration)
+        instrument = repo.get_instrument(buy.request.instrument_ids[0])
+    before = portfolio_state(database)
+    trade = TradeConfirmation(
+        instrument_id=instrument.instrument_id,
+        venue=instrument.venue,
+        side="BUY",
+        quantity="3",
+        price="10",
+        currency="USD",
+        executed_at=datetime(2026, 10, 1, tzinfo=UTC),
+        idempotency_key="release-checklist",
+    )
+    trade_file = tmp_path / "trade.json"
+    trade_file.write_text(trade.model_dump_json())
+    assert "Cancelled" in cli("record-trade", "--input", trade_file, confirmation="n\n")
+    assert portfolio_state(database) == before
+    cli("record-trade", "--input", trade_file, confirmation="y\n")
+    receipt = json.loads(cli("execution-receipt", trade.idempotency_key))
+    assert receipt["position"]["quantity"] == "3"
+    cli("record-trade", "--input", trade_file, confirmation="y\n")
+    assert json.loads(cli("execution-receipt", trade.idempotency_key)) == receipt
+    held = portfolio_state(database)
+    cli("scan", "sell", "--fixture", "valid")
+    assert portfolio_state(database) == held
+    with database.read() as repo:
+        sell = next(r for r in repo.list_runs(100) if "sell_collection" in r.configuration)
+
+    # Persist an actual interruption. The next CLI process must resume its frozen
+    # provider/calendar identity, not infer current config or recollect completed work.
+    request, resolver = fixture_request(tmp_path / "resume-inputs")
+    runtime = load_runtime(config, runtime_dir)
+
+    def interrupt(message):
+        if message.startswith("Collection 1/"):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        collect_sell(
+            database,
+            runtime,
+            SellEvidence(
+                market=request.market,
+                requested_as_of=request.requested_as_of,
+                history=request.policy.requirements(),
+                cutoff_policy=request.cutoff_policy,
+            ),
+            RawFixtureProvider(),
+            history_resolver=resolver,
+            progress=interrupt,
+        )
+    with database.read() as repo:
+        cancelled = next(r for r in repo.list_runs(100) if r.status == OperationalStatus.CANCELLED)
+    cli("scan", "resume", cancelled.run_id)
+    assert portfolio_state(database) == held
+
+    evidence = []
+    for run in (buy, sell, cancelled):
+        first = json.loads(cli("report", "show", run.run_id, "--json"))
+        assert first["report"]["stages"]["verdict"] == "NOT_RUN"
+        assert json.loads(cli("report", "show", run.run_id, "--json")) == first
+        with database.read() as repo:
+            artifacts = repo.list_artifacts(run.run_id)
+        hashes = {
+            a.name: hashlib.sha256(Path(a.reference).read_bytes()).hexdigest() for a in artifacts
+        }
+        cli("scan", "resume", run.run_id)
+        cli("report", "regenerate", run.run_id)
+        assert {
+            a.name: hashlib.sha256(Path(a.reference).read_bytes()).hexdigest() for a in artifacts
+        } == hashes
+        evidence.append(
+            {
+                "run_id": str(run.run_id),
+                "mode": run.request.mode,
+                "artifacts": hashes,
+                "fresh_process_reopen": True,
+            }
+        )
+    cli("portfolio")
+    destination = os.environ.get("STOCK_ANALYSER_ACCEPTANCE_EVIDENCE")
+    if destination:
+        Path(destination).write_text(
+            json.dumps(
+                {
+                    "scope": "synthetic fixtures; disposable database removed after test",
+                    "configuration_migrations_trade_confirmation_resume": "PASS",
+                    "reports": evidence,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+
 def test_universe_snapshot_restart_replay_and_immutable_inputs(database, tmp_path):
     from stock_analyser.universe import replay_universe, save_universe, select_universe
     from stock_analyser.universe_demo import fixture_request
