@@ -566,3 +566,33 @@ accepts a frozen enriched population and existing history references.
 **Results remain labeled PROTOTYPE:** US-011's full-sector coverage gate is still
 blocked and Buy remains unavailable. See [sector selection](docs/sector-selection.md)
 for the adapter/input contract, configuration, cache reuse and replay guarantees.
+
+### Buy collection workflow (prototype)
+
+Choose **Buy** in the menu, enter `technology`, then a frozen selection JSON path
+or a fixture scenario. The equivalent command is:
+
+```sh
+stock-analyser scan buy --sector technology --fixture valid
+stock-analyser scan buy --sector technology --fixture zero
+stock-analyser scan buy --sector technology --fixture one-stock-failure
+stock-analyser scan buy --sector technology --fixture shortfall
+stock-analyser scan buy --sector technology --fixture unassessable
+# Explicit supplied population and retained price evidence; no network requests:
+stock-analyser scan buy --sector technology --input selection-request.json
+```
+
+Each command needs the configured PostgreSQL database. Reports include every
+selected stock, retained price evidence, per-stock failures, shared benchmark
+context, selection policy and cutoff. Zero-selection and fewer-than-ten outcomes
+are saved explicitly. Failed stock or benchmark collection exits nonzero after
+saving the report. `report show` and `report regenerate` work on the printed run ID.
+
+Set top-level `stock_concurrency = 2` (1–16) in TOML to bound stock workers; all
+workers and shared benchmarks use one provider access lane. Fixtures and frozen
+inputs make no network calls. A benchmark absent from frozen inputs is disclosed
+as failed context rather than synthesized. Live sector enumeration remains gated
+by US-011 qualification, so the command requires explicit `--input` or `--fixture`.
+Every result is labeled **PROTOTYPE**, with incomplete coverage disclosed; it is
+not a completed full-sector top-ten scan. Holdings are unchanged and strategy,
+recommendations, trade intents and agent verdicts remain unrun.

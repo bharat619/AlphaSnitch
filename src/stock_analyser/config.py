@@ -31,6 +31,7 @@ class Settings(BaseModel):
     market: Literal["US"] = "US"
     massive: MassiveSettings = MassiveSettings()
     price_routing: RoutingSettings = RoutingSettings()
+    stock_concurrency: int = Field(default=2, ge=1, le=16)
     paths: PathSettings = PathSettings()
 
 
@@ -42,6 +43,7 @@ class Runtime(BaseModel):
     market: Literal["US"]
     massive: MassiveSettings = MassiveSettings()
     price_routing: RoutingSettings = RoutingSettings()
+    stock_concurrency: int = Field(default=2, ge=1, le=16)
     database_url: SecretStr | None = Field(default=None, exclude=True, repr=False)
     config_file: Path | None
     data_dir: Path
@@ -112,6 +114,7 @@ def load_runtime(
         market="US",
         massive=settings.massive,
         price_routing=settings.price_routing,
+        stock_concurrency=settings.stock_concurrency,
         database_url=os.environ.get("STOCK_ANALYSER_DATABASE_URL") or None,
         config_file=path.resolve() if path.exists() else None,
         data_dir=root,
