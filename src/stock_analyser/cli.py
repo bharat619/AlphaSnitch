@@ -27,6 +27,107 @@ console = Console(highlight=False)
 WORKFLOWS = ("Buy", "Sell", "Portfolio", "Record offline trade", "Reports")
 report_app = typer.Typer(help="Browse, reopen, and regenerate saved data-readiness reports.")
 app.add_typer(report_app, name="report")
+universe_app = typer.Typer(help="Select and replay an explicit prototype sector population.")
+app.add_typer(universe_app, name="universe")
+
+
+def display_universe(snapshot) -> None:
+    result = snapshot.result
+    display(f"Universe snapshot: {snapshot.snapshot_id}")
+    display("Scope: PROTOTYPE; full-sector acceptance remains blocked by US-011.")
+    display(f"Enumeration complete: {result.enumeration_complete}")
+    display(f"Unresolved classifications: {len(result.unresolved_classifications)}")
+    display(f"Selected: {len(result.selected)}; shortfall: {result.shortfall}")
+    for index, instrument in enumerate(result.selected, start=1):
+        display(f"{index}. {instrument.symbol} ({instrument.instrument_id})")
+
+
+@universe_app.command("demo")
+def universe_demo(
+    ctx: typer.Context,
+    shortfall: bool = typer.Option(False, help="Demonstrate seven eligible securities."),
+) -> None:
+    """Persist synthetic ties, exclusions, cached histories and ordered selection."""
+    from uuid import uuid4
+
+    from stock_analyser.universe import save_universe, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    database = None
+    try:
+        runtime = ctx.obj
+        initialize_database(runtime)
+        database = Database(runtime.database_url.get_secret_value())
+        request, resolver = fixture_request(
+            runtime.snapshots_dir / "universe-fixtures" / str(uuid4()),
+            eligible_count=7 if shortfall else 12,
+        )
+        snapshot = select_universe(request, resolver)
+        path = save_universe(database, runtime.snapshots_dir, snapshot)
+        display_universe(snapshot)
+        display(f"Saved: {path}")
+        display(f"Replay: stock-analyser universe replay {snapshot.snapshot_id}")
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database:
+            database.close()
+
+
+@universe_app.command("select")
+def universe_select(
+    ctx: typer.Context,
+    input_path: Path = typer.Option(..., "--input", help="Frozen SelectionRequest JSON."),
+) -> None:
+    """Select from supplied reference/enrichment data and cached history manifests."""
+    from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
+    from stock_analyser.universe import SelectionRequest, save_universe, select_universe
+
+    database = None
+    try:
+        request = SelectionRequest.model_validate_json(input_path.read_bytes())
+        snapshot = select_universe(
+            request, HistoryResolver(ExchangeCalendarAdapter(), request.cutoff_policy)
+        )
+        initialize_database(ctx.obj)
+        database = Database(ctx.obj.database_url.get_secret_value())
+        path = save_universe(database, ctx.obj.snapshots_dir, snapshot)
+        display_universe(snapshot)
+        display(f"Saved: {path}")
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database:
+            database.close()
+
+
+@universe_app.command("replay")
+def universe_replay(
+    ctx: typer.Context,
+    snapshot_id: UUID,
+    as_json: bool = typer.Option(False, "--json", help="Show complete frozen inputs and result."),
+) -> None:
+    """Verify cached evidence and reproduce the saved order without provider calls."""
+    from stock_analyser.universe import replay_universe
+
+    database = None
+    try:
+        if ctx.obj.database_url is None:
+            raise ConfigurationError("Set STOCK_ANALYSER_DATABASE_URL before universe replay.")
+        database = Database(ctx.obj.database_url.get_secret_value())
+        with database.read() as repo:
+            snapshot = repo.get_universe(snapshot_id)
+        replay_universe(snapshot)
+        if as_json:
+            display(snapshot.model_dump_json(indent=2))
+        else:
+            display_universe(snapshot)
+            display("Replay verified: ordered selection and all ranking inputs match.")
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database:
+            database.close()
 
 
 def workflow_label(name: str) -> str:

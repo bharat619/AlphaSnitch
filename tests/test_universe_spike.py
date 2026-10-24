@@ -276,7 +276,7 @@ def test_workload_prices_every_candidate_and_keeps_replay_separate():
     assert estimate["cold_upper_scenario_two_retries_and_three_pages"] == 9 * 4749
 
 
-def test_workload_and_currency_checks_follow_policy(monkeypatch):
+def test_workload_hypotheses_do_not_mutate_versioned_eligibility(monkeypatch):
     monkeypatch.setitem(POLICY, "selection_count", 3)
     monkeypatch.setitem(POLICY, "currency", "CAD")
     monkeypatch.setitem(POLICY, "minimum_completed_daily_bars", 300)
@@ -292,8 +292,8 @@ def test_workload_and_currency_checks_follow_policy(monkeypatch):
     assumptions = "\n".join(estimate["assumptions"])
     assert "selected 3" in assumptions and "3 selections" in assumptions
     assert "300 daily bars" in assumptions and "Metadata TTL 48h" in assumptions
-    assert reference_exclusions(reference(currency_name="cad")) == []
-    assert "NON_CAD_OR_UNKNOWN_CURRENCY" in reference_exclusions(reference())
+    assert "NON_USD_OR_UNKNOWN_CURRENCY" in reference_exclusions(reference(currency_name="cad"))
+    assert reference_exclusions(reference()) == []
 
 
 @pytest.mark.parametrize("sector", ["Unfamiliar", "", None, True])

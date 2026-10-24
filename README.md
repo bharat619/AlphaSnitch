@@ -542,3 +542,27 @@ See the [policy, experiment and alternatives](docs/technology-universe.md) and
 ```sh
 uv run --locked pytest -q tests/test_universe_spike.py
 ```
+
+## Reproducible sector selection (US-012)
+
+With PostgreSQL configured, run an offline synthetic selection with tied liquidity,
+duplicate listings and exclusions, then replay the saved snapshot after restart:
+
+```sh
+uv run --locked stock-analyser init
+uv run --locked stock-analyser universe demo
+uv run --locked stock-analyser universe replay <snapshot-id>
+uv run --locked stock-analyser universe replay <snapshot-id> --json
+uv run --locked stock-analyser universe demo --shortfall
+```
+
+Selection filters common-equity identity, classification, price, 60-session raw
+traded value and mandatory history before ordering by liquidity then instrument
+UUID. Snapshots retain the full population, exclusions, ranking inputs and exact
+cached histories. The shortfall fixture selects seven; incomplete enumeration and
+unknown classifications are reported separately. `universe select --input <json>`
+accepts a frozen enriched population and existing history references.
+
+**Results remain labeled PROTOTYPE:** US-011's full-sector coverage gate is still
+blocked and Buy remains unavailable. See [sector selection](docs/sector-selection.md)
+for the adapter/input contract, configuration, cache reuse and replay guarantees.

@@ -52,7 +52,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0004"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0005"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -65,6 +65,90 @@ def test_migration_idempotency_and_schema(database):
         cfg.attributes["connection"] = connection
         command.downgrade(cfg, "base")
     database.initialize()
+
+
+def test_universe_snapshot_restart_replay_and_immutable_inputs(database, tmp_path):
+    from stock_analyser.universe import replay_universe, save_universe, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs")
+    snapshot = select_universe(request, resolver)
+    artifact = save_universe(database, tmp_path, snapshot)
+    saved_bytes = artifact.read_bytes()
+    assert save_universe(database, tmp_path, snapshot) == artifact
+    with database.read() as repo:
+        restored = repo.get_universe(snapshot.snapshot_id)
+    assert replay_universe(restored) == snapshot
+    with pytest.raises(ValueError, match="immutable"), database.write() as repo:
+        repo.put_universe(
+            snapshot.model_copy(
+                update={"result": snapshot.result.model_copy(update={"selected": ()})}
+            )
+        )
+    env = {
+        **os.environ,
+        "STOCK_ANALYSER_DATABASE_URL": database.engine.url.render_as_string(hide_password=False),
+    }
+    replayed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stock_analyser",
+            "universe",
+            "replay",
+            str(snapshot.snapshot_id),
+            "--json",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(replayed.stdout) == snapshot.model_dump(mode="json")
+    assert artifact.read_bytes() == saved_bytes
+
+
+def test_universe_file_publication_failure_can_retry_from_database(database, tmp_path, monkeypatch):
+    from stock_analyser import collection
+    from stock_analyser.universe import save_universe, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs", eligible_count=7)
+    snapshot = select_universe(request, resolver)
+    original = collection.immutable_write
+
+    def fail_publication(*args):
+        raise OSError("Simulated publication interruption")
+
+    monkeypatch.setattr(collection, "immutable_write", fail_publication)
+    with pytest.raises(OSError, match="interruption"):
+        save_universe(database, tmp_path, snapshot)
+    with database.read() as repo:
+        restored = repo.get_universe(snapshot.snapshot_id)
+    assert restored == snapshot
+    monkeypatch.setattr(collection, "immutable_write", original)
+    assert save_universe(database, tmp_path, restored).exists()
+    assert restored.result.shortfall == 3
+
+
+def test_universe_cli_demo_and_replay(database, tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "universe", "demo", "--shortfall"])
+    assert result.exit_code == 0, result.output
+    assert "PROTOTYPE" in result.output and "shortfall: 3" in result.output
+    snapshot_id = next(
+        line.split(": ", 1)[1]
+        for line in result.output.splitlines()
+        if line.startswith("Universe snapshot:")
+    )
+    replayed = runner.invoke(app, ["universe", "replay", snapshot_id])
+    assert replayed.exit_code == 0, replayed.output
+    assert "Replay verified" in replayed.output and "shortfall: 3" in replayed.output
 
 
 def test_restart_in_separate_processes(database):
