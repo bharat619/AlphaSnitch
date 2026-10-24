@@ -1,0 +1,73 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-10-24T14:44:51.697208+00:00",
+  "source_commit": "5126a6b428eb396f39bfe641c8d0189b171845ae",
+  "source_tracked_dirty": false,
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "fixture_readiness": {
+    "tests": 472,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 472,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "8f90aae1a5cd5e7a439cf6f583bbd7c18056a3c2d511021c3f765a5b423cd7e1",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "live_observation": {
+    "status": "OBSERVED",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    },
+    "publication_timing": "unverified",
+    "scope": "AAPL/SPY only; not publication or sector readiness",
+    "reports": [
+      {
+        "run_id": "7ce50d9b-0252-485b-88d0-4163230fb23d",
+        "symbol": "AAPL",
+        "history_snapshot_count": 2,
+        "collection_status": "FAILED",
+        "publication_timing": "unverified",
+        "report_json_sha256": "36a04671bd9323da898aae61c3457b96d2d6b9a58d15288ed0ea14c6be5ce8f8"
+      },
+      {
+        "run_id": "b69920c9-407a-49f0-960e-d375de119259",
+        "symbol": "SPY",
+        "history_snapshot_count": 2,
+        "collection_status": "FAILED",
+        "publication_timing": "unverified",
+        "report_json_sha256": "c99c70f4a96f3ea714a58c476e065d03ffccb51c04fb58ad2706636f36ba33ca"
+      }
+    ]
+  },
+  "pilot_sector": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "CLASSIFICATION_COMPLETENESS_UNVERIFIED",
+      "CROSS_SOURCE_IDENTITY_MAPPING_UNVERIFIED",
+      "HISTORY_AND_LIQUIDITY_NOT_MEASURED",
+      "RETENTION_RIGHTS_UNVERIFIED",
+      "REFERENCE_ENUMERATION_INCOMPLETE",
+      "DISCOVERY_ENUMERATION_INCOMPLETE"
+    ]
+  },
+  "pilot_sector_source": {
+    "kind": "current_run",
+    "reference": "docs/evidence/technology-universe-live-2026-10-24.json",
+    "sha256": "c7bacde47940432b1166498d2b4a2db3f0a02e2dfac5eb7135f7526ae3c7093b"
+  },
+  "milestone": {
+    "complete": false,
+    "blockers": [
+      "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+    ]
+  },
+  "limitations": "Data readiness only; no recommendation or production reliability claim"
+}

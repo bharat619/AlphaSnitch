@@ -11,6 +11,24 @@ tracked tree after successful `uv sync --locked` into a new local clone. The
 [fresh-process reopen evidence](evidence/foundation-reopen-2026-10-24.json) retains
 the three fixture runs and artifact hashes. Ruff lint and formatting checks passed.
 Live checks were not invoked for this record; pilot coverage remains failed.
+
+### Bounded live observation (2026-10-24)
+
+After the fixture-only record above, an explicitly opt-in bounded run observed the
+AAPL/SPY smoke with two history snapshots per symbol and complete requested history.
+Publication timing remains unverified. The run enumerated only two pages from each
+sector source, so both enumerations were truncated; 685 reference candidates and 500
+discovery candidates are lower bounds, not complete populations. Of the bounded
+sample, exact symbol reconciliation found 149 matches and 107 eligible identity
+matches. Classification completeness, broader history/liquidity, and retention
+rights remain unverified. The pilot gate therefore remains **FAIL** and the release
+milestone remains incomplete.
+
+The [live release record](evidence/foundation-live-2026-10-24.json) captures the
+fixture result, AAPL/SPY observation, pilot gate, and source hash. Its referenced
+[sector findings](evidence/technology-universe-live-2026-10-24.json) retain
+allowlisted aggregate metadata and page hashes, without raw provider rows or page
+cursors. These observations do not grant full-sector acceptance.
 The recorded acceptance also verifies all 472 expected test IDs and successful
 mandatory fresh-process evidence, including its SHA-256 hash.
 
