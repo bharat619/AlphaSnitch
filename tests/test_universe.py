@@ -1,6 +1,6 @@
 """Frozen sector selection must explain exclusions and replay without providers."""
 
-from datetime import timedelta
+from datetime import date, timedelta, timezone
 from decimal import ROUND_UP, Decimal, Inexact, localcontext
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +16,7 @@ from stock_analyser.universe import (
     ReferenceUniverseAdapter,
     SelectionPolicy,
     UniverseSnapshot,
+    freeze_selection,
     replay_universe,
     select_universe,
 )
@@ -224,10 +225,41 @@ def test_ranking_preserves_differences_beyond_default_decimal_precision(data, tm
     assert snapshot.result.selected[0] == first.instrument
 
 
-def test_incomparable_liquidity_feeds_cannot_be_ranked_together(data, tmp_path):
+@pytest.mark.parametrize(
+    "alternate_symbol,missing_weekly",
+    [
+        ("TECH00", False),
+        ("CHEAP", False),
+        ("ILLIQUID", False),
+        ("TECH00", True),
+    ],
+)
+def test_only_eligible_candidates_determine_feed_compatibility(
+    data, tmp_path, alternate_symbol, missing_weekly
+):
     from stock_analyser.contracts import ProviderRoute
 
     request, resolver = data
+    if missing_weekly:
+        request, resolver = fixture_request(
+            tmp_path / "weekly",
+            policy=SelectionPolicy(
+                mandatory_history=(HistoryRequirement(timeframe="weekly", minimum_bars=2),)
+            ),
+        )
+        request = request.model_copy(
+            update={
+                "histories": tuple(
+                    h
+                    for h in request.histories
+                    if not (
+                        h.metadata.instrument.symbol == alternate_symbol
+                        and h.metadata.timeframe == "weekly"
+                    )
+                )
+            }
+        )
+    baseline = select_universe(request, resolver)
     alternate_feed = request.market.route("prices").feed.model_copy(update={"feed_id": "alternate"})
     market = request.market.model_copy(
         update={
@@ -248,16 +280,97 @@ def test_incomparable_liquidity_feeds_cannot_be_ranked_together(data, tmp_path):
             metadata = packet.metadata.model_copy(
                 update={
                     "market": market,
-                    "feed": alternate_feed if symbol == "TECH00" else packet.metadata.feed,
+                    "feed": alternate_feed if symbol == alternate_symbol else packet.metadata.feed,
                 }
             )
             return packet.model_copy(update={"metadata": metadata})
 
-        request = change_packet(request, tmp_path, symbol, change)
+        request = change_packet(
+            request,
+            tmp_path,
+            symbol,
+            change,
+            timeframe=reference.metadata.timeframe,
+            adjustment=reference.metadata.adjustment,
+        )
     snapshot, decisions = decide((request, resolver))
-    assert snapshot.result.selected == ()
-    assert "INCOMPARABLE_LIQUIDITY_INPUTS" in decisions["TECH00"].reasons
-    assert "INCOMPARABLE_LIQUIDITY_INPUTS" in decisions["TECH01"].reasons
+    if alternate_symbol == "TECH00" and not missing_weekly:
+        assert snapshot.result.selected == ()
+        assert "INCOMPARABLE_LIQUIDITY_INPUTS" in decisions["TECH00"].reasons
+        assert "INCOMPARABLE_LIQUIDITY_INPUTS" in decisions["TECH01"].reasons
+        assert "INCOMPARABLE_LIQUIDITY_INPUTS" not in decisions["CHEAP"].reasons
+    else:
+        assert snapshot.result.selected == baseline.result.selected
+        assert len(snapshot.result.selected) == 10
+        assert all("INCOMPARABLE_LIQUIDITY_INPUTS" not in d.reasons for d in decisions.values())
+    legacy = freeze_selection(
+        snapshot.request, snapshot.resolutions, implementation_version="sector-selection-1"
+    )
+    assert legacy.result.selected == ()
+    assert replay_universe(UniverseSnapshot.model_validate_json(legacy.model_dump_json())) == legacy
+    assert legacy.snapshot_id != snapshot.snapshot_id
+
+
+@pytest.mark.parametrize("effective_date", [date(2026, 10, 16), date(2026, 10, 17)])
+@pytest.mark.parametrize("hours_later", [0, 5])
+def test_classification_uses_market_date_for_equivalent_instants(data, effective_date, hours_later):
+    request, resolver = data
+    # At 02:00 UTC on October 17 the New York market date is still October 16.
+    request = request.model_copy(
+        update={"requested_as_of": request.requested_as_of + timedelta(hours=hours_later)}
+    )
+    candidate = next(c for c in request.population.candidates if c.reference.ticker == "TECH00")
+    request = change_candidate(
+        request,
+        "TECH00",
+        classification=candidate.classification.model_copy(
+            update={"effective_date": effective_date}
+        ),
+    )
+    snapshots = [
+        select_universe(
+            request.model_copy(
+                update={
+                    "requested_as_of": request.requested_as_of.astimezone(
+                        timezone(timedelta(hours=offset))
+                    )
+                }
+            ),
+            resolver,
+        )
+        for offset in (0, 14, -12)
+    ]
+    assert all(s.result == snapshots[0].result for s in snapshots)
+    decision = next(d for d in snapshots[0].result.decisions if d.ticker == "TECH00")
+    assert ("FUTURE_CLASSIFICATION" in decision.reasons) == (effective_date.day == 17)
+    # Historical version-1 results retain their original semantics and identity.
+    legacy = freeze_selection(
+        snapshots[1].request, snapshots[1].resolutions, implementation_version="sector-selection-1"
+    )
+    assert replay_universe(UniverseSnapshot.model_validate_json(legacy.model_dump_json())) == legacy
+    legacy_decision = next(d for d in legacy.result.decisions if d.ticker == "TECH00")
+    assert "FUTURE_CLASSIFICATION" not in legacy_decision.reasons
+
+
+def test_excluded_candidate_window_does_not_poison_ranking(data, monkeypatch):
+    import stock_analyser.universe as universe
+
+    request, resolver = data
+    baseline = select_universe(request, resolver)
+    original = universe._history
+
+    def shifted_window(reference, instrument, request, resolution):
+        packet, bars = original(reference, instrument, request, resolution)
+        if instrument.symbol == "CHEAP":
+            bars = tuple(
+                b.model_copy(update={"session": b.session - timedelta(days=1)}) for b in bars
+            )
+        return packet, bars
+
+    monkeypatch.setattr(universe, "_history", shifted_window)
+    snapshot = select_universe(request, resolver)
+    assert snapshot.result.selected == baseline.result.selected
+    assert all("INCOMPARABLE_LIQUIDITY_INPUTS" not in d.reasons for d in snapshot.result.decisions)
 
 
 @pytest.mark.parametrize("failure", ["gap", "stale", "split", "unverified", "wrong_instrument"])
@@ -418,6 +531,88 @@ def test_adapter_preserves_partial_population_and_enrichment_failures(data):
     assert all(c.classification is None for c in population.candidates)
     assert "TECH00" in calls and "ETF" not in calls
     assert "Do not persist" not in population.model_dump_json()
+    candidate = next(c for c in population.candidates if c.reference.ticker == "TECH00")
+    assert [(f.stage, f.category) for f in candidate.enrichment_failures] == [
+        ("identity", "UNRESOLVED"),
+        ("classification", "PROVIDER_UNAVAILABLE"),
+    ]
+
+
+@pytest.mark.parametrize("stage", ["identity", "classification"])
+@pytest.mark.parametrize(
+    "failure,category",
+    [
+        (None, "UNRESOLVED"),
+        (ConnectionError("secret-url"), "PROVIDER_UNAVAILABLE"),
+        ({"invalid": "secret-response"}, "INVALID_RESPONSE"),
+    ],
+)
+def test_enrichment_failures_have_sanitized_categories(data, stage, failure, category):
+    request, _ = data
+    candidate = next(c for c in request.population.candidates if c.reference.ticker == "TECH00")
+
+    def fail(*args):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+
+    adapter = ReferenceUniverseAdapter(
+        Enumeration(
+            "massive",
+            {},
+            rows=[candidate.reference.model_dump(exclude={"schema_version"})],
+            status="COMPLETE",
+            reason="TERMINAL_PAGE",
+        ),
+        request.population.source,
+        fail if stage == "identity" else lambda _: candidate.instrument,
+        fail if stage == "classification" else lambda *_: candidate.classification,
+    )
+    population = adapter.enumerate()
+    assert [(f.stage, f.category) for f in population.candidates[0].enrichment_failures] == [
+        (stage, category)
+    ]
+    assert "secret" not in population.model_dump_json()
+
+
+@pytest.mark.parametrize("stage", ["identity", "classification"])
+def test_enrichment_programming_errors_are_not_silently_downgraded(data, stage):
+    request, _ = data
+    candidate = next(c for c in request.population.candidates if c.reference.ticker == "TECH00")
+
+    def broken(*args):
+        raise RuntimeError("programming error")
+
+    adapter = ReferenceUniverseAdapter(
+        Enumeration(
+            "massive", {}, rows=[candidate.reference.model_dump(exclude={"schema_version"})]
+        ),
+        request.population.source,
+        broken if stage == "identity" else lambda _: candidate.instrument,
+        broken if stage == "classification" else lambda *_: candidate.classification,
+    )
+    with pytest.raises(RuntimeError, match="programming error"):
+        adapter.enumerate()
+
+
+def test_rule_version_is_immutable_and_spike_mutation_cannot_change_replay(data, monkeypatch):
+    from dataclasses import FrozenInstanceError
+
+    from stock_analyser.universe_policy import TECHNOLOGY_RULES_V1
+    from stock_analyser.universe_spike import POLICY
+
+    snapshot, _ = decide(data)
+    with pytest.raises(FrozenInstanceError):
+        TECHNOLOGY_RULES_V1.currency = "CAD"
+    with pytest.raises(TypeError):
+        TECHNOLOGY_RULES_V1.listing_order[0] = "OTC"
+    monkeypatch.setitem(POLICY, "currency", "CAD")
+    monkeypatch.setitem(POLICY, "eligible_type", "ETF")
+    monkeypatch.setitem(POLICY, "venues", [])
+    monkeypatch.setitem(POLICY, "listing_order", [])
+    monkeypatch.setitem(POLICY, "other_known_sectors", ["Unknown"])
+    assert replay_universe(snapshot) == snapshot
+    assert "enrichment_failures" not in snapshot.model_dump_json()
 
 
 def test_tampered_price_chain_or_selection_fails_replay(data):

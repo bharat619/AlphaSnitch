@@ -49,16 +49,24 @@ The identity resolver must return an existing, verified `Instrument`, binding th
 reference share-class/listing FIGIs to immutable UUIDs and effective provider
 symbols; missing or failed resolution is excluded. The adapter does not infer
 cross-provider identity from ticker equality or invent new IDs during a rename.
+Both callbacks have typed protocols (`IdentityResolver` and `ClassificationLoader`).
 The classification loader returns the original sector, industry, source taxonomy,
 retrieval time, optional effective date, source/hash and OBSERVED/UNKNOWN/
-CONFLICTING/FAILED state. Loader failures remain unknown. Callers may wrap the
+CONFLICTING/FAILED state. Each candidate retains sanitized enrichment failures by
+stage (identity/classification): `UNRESOLVED` for a missing result,
+`PROVIDER_UNAVAILABLE` for an `OSError` or explicit `EnrichmentProviderError`, and
+`INVALID_RESPONSE` for schema validation failures. No exception text or provider
+payload is retained. SDK-specific availability failures should be wrapped in
+`EnrichmentProviderError`; unexpected callback errors propagate so programming
+errors are not silently treated as missing classification. Callers may wrap the
 loader in `EvidenceCache.metadata` to reuse current enrichment; preserve the
 original source retrieval time on cache hits.
 
 Mapping `yahoo-sector-map-1` recognizes exact `Technology` and the other known
 Yahoo sectors. Unknown labels, missing profiles and conflicting share-class
-classifications cannot enter the selection. Future effective classifications are
-excluded. Retrieval-time classifications without an effective date do not establish
+classifications cannot enter the selection. Effective dates are compared with the
+market-local date of the requested instant, independently of its supplied timezone;
+future classifications are excluded. Retrieval-time classifications without an effective date do not establish
 point-in-time membership for historical backtests. The input preserves them as
 such. Excluded security types do not generate spurious unresolved-sector counts.
 
@@ -111,8 +119,10 @@ Selection version `us-technology-selection-1` implements the US-011 proposal:
   A valid zero-volume session contributes zero. Require latest raw close **at
   least $5** and mean traded value **at least $10 million**, inclusive, by
   default. Both values are configurable nonnegative decimals in the request's
-  policy and remain evaluation hypotheses. Different feeds or different
-  60-session windows prevent a combined ranking.
+  policy and remain evaluation hypotheses. Compatibility sets include only
+  candidates passing every eligibility, history, price and liquidity filter.
+  Different feeds or 60-session windows among those candidates prevent a combined
+  ranking; excluded candidates retain their own reasons and cannot block it.
 - Rank by exact sum of the 60 traded values descending, then canonical instrument
   UUID ascending. Because every divisor is 60, this is exactly mean-value order.
   Products and rational sums/comparisons avoid ambient Decimal precision and
@@ -125,8 +135,20 @@ The frozen policy values, source/enrichment timestamps, original metadata,
 instrument identities and calendar resolutions are part of the input hash.
 Candidate and history-reference order is normalized before hashing. Changing a
 threshold or history generation creates a new snapshot identity. Semantic changes
-to this implementation must bump `sector-selection-1`; old snapshots must keep
-their existing evaluation semantics.
+to this implementation must bump its version; old snapshots must keep their
+existing evaluation semantics. New snapshots use `sector-selection-2`, which fixes
+eligible-only compatibility and market-local classification dates. Existing
+`sector-selection-1` snapshots replay with their original rules (including these
+two historical bugs), retaining their input hashes and results. Reselect their
+frozen request to obtain a corrected v2 snapshot with a new identity; replay
+never silently replaces saved evidence. The v1 compatibility path is for historical
+replay, not new selections.
+
+Eligibility, taxonomy and listing order live in the shared immutable
+`TECHNOLOGY_RULES_V1` in `stock_analyser.universe_policy`. Its tuple-valued rules
+are independent of the qualification spike's exported proposal dictionary.
+Changing that dictionary cannot change selection or replay. New rule semantics
+require a new version, not mutation of v1.
 
 ## Persistence and history reuse
 

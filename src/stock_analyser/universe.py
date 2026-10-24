@@ -5,14 +5,16 @@ prototype even when enumeration of the supplied population is complete.
 """
 
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import date
 from decimal import Context, Decimal, localcontext
 from fractions import Fraction
-from typing import Annotated, Literal, Self
+from functools import partial
+from typing import Annotated, Literal, Protocol, Self
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, ValidationError, model_serializer, model_validator
 
 from stock_analyser.cache import digest, load_snapshot
 from stock_analyser.calendars import CutoffPolicy, HistoryResolver, ResolvedHistory
@@ -27,9 +29,12 @@ from stock_analyser.contracts import (
 )
 from stock_analyser.persistence.records import SnapshotReference
 from stock_analyser.providers import PriceHistory
-from stock_analyser.universe_spike import POLICY, Enumeration, reference_exclusions
+from stock_analyser.universe_policy import TECHNOLOGY_RULES_V1, reference_exclusions
+from stock_analyser.universe_spike import Enumeration
 
 Money = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
+SelectionImplementation = Literal["sector-selection-1", "sector-selection-2"]
+CURRENT_IMPLEMENTATION: SelectionImplementation = "sector-selection-2"
 
 
 class SelectionPolicy(Contract):
@@ -89,11 +94,16 @@ class Classification(Contract):
     def mapped_sector(self) -> str | None:
         if self.status != "OBSERVED":
             return None
-        if self.original_sector == "Technology":
-            return "technology"
-        if self.original_sector in POLICY["other_known_sectors"]:
+        if self.original_sector == TECHNOLOGY_RULES_V1.source_sector:
+            return TECHNOLOGY_RULES_V1.mapped_sector
+        if self.original_sector in TECHNOLOGY_RULES_V1.other_known_sectors:
             return "other"
         return None
+
+
+class EnrichmentFailure(Contract):
+    stage: Literal["identity", "classification"]
+    category: Literal["UNRESOLVED", "PROVIDER_UNAVAILABLE", "INVALID_RESPONSE"]
 
 
 class UniverseCandidate(Contract):
@@ -102,6 +112,48 @@ class UniverseCandidate(Contract):
     classification: Classification | None = None
     # Resolver must verify FIGI-to-UUID and effective provider symbol mappings.
     identity_verified: bool = False
+    enrichment_failures: tuple[EnrichmentFailure, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_candidates(self, handler):
+        data = handler(self)
+        if not self.enrichment_failures:
+            data.pop("enrichment_failures", None)
+        return data
+
+
+class IdentityResolver(Protocol):
+    def __call__(self, listing: ReferenceListing) -> Instrument | None: ...
+
+
+class ClassificationLoader(Protocol):
+    def __call__(
+        self, listing: ReferenceListing, instrument: Instrument | None
+    ) -> Classification | None: ...
+
+
+class EnrichmentProviderError(Exception):
+    """Callbacks may wrap SDK-specific provider failures in this public category."""
+
+
+def _enrich[T: Contract](
+    stage: Literal["identity", "classification"],
+    loader: Callable[[], object],
+    model: type[T],
+    failures: list[EnrichmentFailure],
+) -> T | None:
+    try:
+        value = loader()
+        if value is not None:
+            return model.model_validate(value)
+        category = "UNRESOLVED"
+    except (OSError, EnrichmentProviderError):
+        category = "PROVIDER_UNAVAILABLE"
+    except ValidationError:
+        category = "INVALID_RESPONSE"
+    # Unexpected callback exceptions propagate: programming errors must be fixed.
+    failures.append(EnrichmentFailure(stage=stage, category=category))
+    return None
 
 
 class UniversePopulation(Contract):
@@ -129,7 +181,13 @@ class ReferenceUniverseAdapter:
     Enrichment may use EvidenceCache.metadata; failure remains unknown.
     """
 
-    def __init__(self, reference: Enumeration, source: SourceRecord, resolve, classify):
+    def __init__(
+        self,
+        reference: Enumeration,
+        source: SourceRecord,
+        resolve: IdentityResolver,
+        classify: ClassificationLoader,
+    ):
         self.reference, self.source = reference, source
         self.resolve, self.classify = resolve, classify
 
@@ -138,24 +196,25 @@ class ReferenceUniverseAdapter:
         for row in sorted(self.reference.rows, key=lambda r: r["ticker"]):
             listing = ReferenceListing.model_validate(row)
             instrument, classification = None, None
+            failures = []
             # Unsupported rows stay in the snapshot without unnecessary profile calls.
             if not reference_exclusions(row):
-                try:
-                    instrument = Instrument.model_validate(self.resolve(listing))
-                except Exception:
-                    pass
-                try:
-                    classification = Classification.model_validate(
-                        self.classify(listing, instrument)
-                    )
-                except Exception:
-                    pass
+                instrument = _enrich(
+                    "identity", partial(self.resolve, listing), Instrument, failures
+                )
+                classification = _enrich(
+                    "classification",
+                    partial(self.classify, listing, instrument),
+                    Classification,
+                    failures,
+                )
             candidates.append(
                 UniverseCandidate(
                     reference=listing,
                     instrument=instrument,
                     classification=classification,
                     identity_verified=instrument is not None,
+                    enrichment_failures=tuple(failures),
                 )
             )
         return UniversePopulation(
@@ -224,11 +283,11 @@ class UniverseSnapshot(Contract):
     request: SelectionRequest
     resolutions: tuple[ResolvedHistory, ...]
     result: SelectionResult
-    implementation_version: Literal["sector-selection-1"] = "sector-selection-1"
+    implementation_version: SelectionImplementation = CURRENT_IMPLEMENTATION
 
     @model_validator(mode="after")
     def consistent_identity(self) -> Self:
-        expected = selection_digest(self.request, self.resolutions)
+        expected = selection_digest(self.request, self.resolutions, self.implementation_version)
         if self.inputs_sha256 != expected or self.snapshot_id != universe_id(expected):
             raise ValueError("Universe snapshot input identity mismatch")
         expected_keys = {
@@ -325,11 +384,19 @@ def _history(reference, instrument, request, resolution):
 
 
 def evaluate(
-    request: SelectionRequest, resolutions: tuple[ResolvedHistory, ...]
+    request: SelectionRequest,
+    resolutions: tuple[ResolvedHistory, ...],
+    implementation_version: SelectionImplementation = CURRENT_IMPLEMENTATION,
 ) -> SelectionResult:
     """No providers, clocks or database: only frozen inputs and verified cache files."""
     candidates = request.population.candidates
     policy = request.policy
+    legacy = implementation_version == "sector-selection-1"
+    classification_date = (
+        request.requested_as_of.date()
+        if legacy
+        else request.requested_as_of.astimezone(ZoneInfo(request.market.timezone)).date()
+    )
     reasons = {
         c.reference.ticker: reference_exclusions(c.reference.model_dump()) for c in candidates
     }
@@ -396,10 +463,7 @@ def evaluate(
         if classification is None or classification.mapped_sector is None:
             unresolved.append(r.ticker)
             why.append("UNKNOWN_CLASSIFICATION")
-        elif (
-            classification.effective_date
-            and classification.effective_date > request.requested_as_of.date()
-        ):
+        elif classification.effective_date and classification.effective_date > classification_date:
             unresolved.append(r.ticker)
             why.append("FUTURE_CLASSIFICATION")
         elif classification.mapped_sector != "technology":
@@ -408,7 +472,7 @@ def evaluate(
         ordered = sorted(
             group,
             key=lambda c: (
-                POLICY["listing_order"].index(c.reference.primary_exchange),
+                TECHNOLOGY_RULES_V1.listing_order.index(c.reference.primary_exchange),
                 c.reference.composite_figi,
                 c.reference.ticker,
             ),
@@ -429,6 +493,7 @@ def evaluate(
         average, price = None, None
         if not why:
             raw_bars = None
+            raw_feed = None
             for requirement in policy.requirements():
                 key = (requirement.timeframe, requirement.adjustment)
                 reference = histories.get((i.instrument_id, *key))
@@ -441,8 +506,10 @@ def evaluate(
                     used.append(packet.metadata.snapshot_id)
                     if key == ("daily", "raw"):
                         raw_bars = bars[-60:]
-                        raw_windows.add(tuple(b.session for b in raw_bars))
-                        raw_feeds.add(digest(packet.metadata.feed.model_dump(mode="json")))
+                        raw_feed = digest(packet.metadata.feed.model_dump(mode="json"))
+                        if legacy:
+                            raw_windows.add(tuple(b.session for b in raw_bars))
+                            raw_feeds.add(raw_feed)
                 except (OSError, ValueError):
                     why.append("INVALID_MANDATORY_HISTORY")
             if raw_bars is not None:
@@ -472,6 +539,8 @@ def evaluate(
                 if total < Fraction(policy.minimum_average_traded_value_usd) * 60:
                     why.append("BELOW_MINIMUM_LIQUIDITY")
             if not why:
+                raw_windows.add(tuple(b.session for b in raw_bars))
+                raw_feeds.add(raw_feed)
                 eligible.append((average, i))
         decisions.append(
             CandidateDecision(
@@ -489,7 +558,7 @@ def evaluate(
         eligible = []
         decisions = [
             d.model_copy(update={"reasons": (*d.reasons, "INCOMPARABLE_LIQUIDITY_INPUTS")})
-            if d.average_traded_value is not None
+            if (d.average_traded_value is not None if legacy else not d.reasons)
             else d
             for d in decisions
         ]
@@ -520,12 +589,12 @@ def select_universe(request: SelectionRequest, resolver: HistoryResolver) -> Uni
     return freeze_selection(request, resolutions)
 
 
-def selection_digest(request, resolutions) -> str:
+def selection_digest(request, resolutions, implementation_version=CURRENT_IMPLEMENTATION) -> str:
     return digest(
         {
             "request": request.model_dump(mode="json"),
             "resolutions": [p.model_dump(mode="json") for p in resolutions],
-            "implementation": "sector-selection-1",
+            "implementation": implementation_version,
         }
     )
 
@@ -534,19 +603,26 @@ def universe_id(inputs_sha256):
     return uuid5(NAMESPACE_URL, f"alphasnitch:universe:{inputs_sha256}")
 
 
-def freeze_selection(request, resolutions) -> UniverseSnapshot:
-    inputs_sha256 = selection_digest(request, resolutions)
+def freeze_selection(
+    request, resolutions, *, implementation_version=CURRENT_IMPLEMENTATION
+) -> UniverseSnapshot:
+    inputs_sha256 = selection_digest(request, resolutions, implementation_version)
     return UniverseSnapshot(
         snapshot_id=universe_id(inputs_sha256),
         inputs_sha256=inputs_sha256,
         request=request,
         resolutions=resolutions,
-        result=evaluate(request, resolutions),
+        result=evaluate(request, resolutions, implementation_version),
+        implementation_version=implementation_version,
     )
 
 
 def replay_universe(snapshot: UniverseSnapshot) -> UniverseSnapshot:
-    replayed = freeze_selection(snapshot.request, snapshot.resolutions)
+    replayed = freeze_selection(
+        snapshot.request,
+        snapshot.resolutions,
+        implementation_version=snapshot.implementation_version,
+    )
     if replayed != snapshot:
         raise ValueError("Universe replay differs from the saved selection or evidence")
     return replayed

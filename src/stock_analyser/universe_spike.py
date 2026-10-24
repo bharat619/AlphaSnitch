@@ -14,32 +14,25 @@ from importlib.metadata import version
 from pathlib import Path
 
 from stock_analyser.massive import MassiveClient
+from stock_analyser.universe_policy import TECHNOLOGY_RULES_V1, reference_exclusions
 from stock_analyser.version import source_version
 
 POLICY = {
-    "version": "us-technology-proposed-1",
+    "version": TECHNOLOGY_RULES_V1.version,
     "status": "evaluation_hypothesis",
     "market": "US",
     "sector": "technology",
-    "taxonomy": {"source": "Yahoo sector", "Technology": "technology"},
-    "taxonomy_version": "yahoo-sector-map-1",
-    "other_known_sectors": [
-        "Basic Materials",
-        "Communication Services",
-        "Consumer Cyclical",
-        "Consumer Defensive",
-        "Energy",
-        "Financial Services",
-        "Healthcare",
-        "Industrials",
-        "Real Estate",
-        "Utilities",
-    ],
-    "eligible_type": "CS",
-    "venues": ["XNAS", "XNYS", "ARCX", "XASE", "BATS"],
-    "currency": "USD",
+    "taxonomy": {
+        "source": TECHNOLOGY_RULES_V1.taxonomy_source,
+        TECHNOLOGY_RULES_V1.source_sector: TECHNOLOGY_RULES_V1.mapped_sector,
+    },
+    "taxonomy_version": TECHNOLOGY_RULES_V1.taxonomy_version,
+    "other_known_sectors": list(TECHNOLOGY_RULES_V1.other_known_sectors),
+    "eligible_type": TECHNOLOGY_RULES_V1.eligible_type,
+    "venues": list(TECHNOLOGY_RULES_V1.listing_order),
+    "currency": TECHNOLOGY_RULES_V1.currency,
     "security_key": "share_class_figi; missing or conflicting identity blocks eligibility",
-    "listing_order": ["XNAS", "XNYS", "ARCX", "XASE", "BATS"],
+    "listing_order": list(TECHNOLOGY_RULES_V1.listing_order),
     "listing_tie_breaker": "composite_figi, then provider ticker, ascending",
     "minimum_price_usd": "5",
     "minimum_average_traded_value_usd": "10000000",
@@ -224,22 +217,6 @@ def enumerate_yahoo(screen, *, max_pages: int = 40, page_size: int = 250) -> Enu
     return result
 
 
-def reference_exclusions(row: dict) -> list[str]:
-    checks = {
-        "INACTIVE_OR_UNKNOWN": row.get("active") is True,
-        "NOT_US_STOCK": row.get("market") == "stocks" and row.get("locale") == "us",
-        "NON_COMMON_OR_UNKNOWN_TYPE": row.get("type") == POLICY["eligible_type"],
-        "UNSUPPORTED_OR_UNKNOWN_VENUE": row.get("primary_exchange") in POLICY["venues"],
-        f"NON_{POLICY['currency']}_OR_UNKNOWN_CURRENCY": row.get("currency_name", "").upper()
-        == POLICY["currency"]
-        if isinstance(row.get("currency_name"), str)
-        else False,
-        "UNKNOWN_SECURITY_IDENTITY": bool((row.get("share_class_figi") or "").strip()),
-        "UNKNOWN_LISTING_IDENTITY": bool((row.get("composite_figi") or "").strip()),
-    }
-    return [reason for reason, passed in checks.items() if not passed]
-
-
 def reconcile(reference: Enumeration, discovery: Enumeration) -> dict:
     exclusions = Counter()
     eligible = []
@@ -262,7 +239,7 @@ def reconcile(reference: Enumeration, discovery: Enumeration) -> dict:
         min(
             group,
             key=lambda row: (
-                POLICY["listing_order"].index(row["primary_exchange"]),
+                TECHNOLOGY_RULES_V1.listing_order.index(row["primary_exchange"]),
                 row["composite_figi"],
                 row["ticker"],
             ),
@@ -364,7 +341,7 @@ def run_spike(client, screen, profile, output: Path, *, max_pages=40, profile_li
                 "classified_technology"
                 if sector == "Technology"
                 else "other_sector"
-                if sector in POLICY["other_known_sectors"]
+                if sector in TECHNOLOGY_RULES_V1.other_known_sectors
                 else "unknown_or_failed"
             )
             profiles[key] += 1
