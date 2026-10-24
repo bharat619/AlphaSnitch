@@ -27,6 +27,18 @@ class Repositories:
     def __init__(self, connection):
         self.connection = connection
 
+    def put_universe(self, snapshot) -> None:
+        self._immutable(s.universe_snapshots, {"snapshot_id": snapshot.snapshot_id}, snapshot)
+
+    def get_universe(self, snapshot_id: UUID):
+        from stock_analyser.universe import UniverseSnapshot
+
+        return self._get(
+            s.universe_snapshots,
+            s.universe_snapshots.c.snapshot_id == snapshot_id,
+            UniverseSnapshot,
+        )
+
     def _get(self, table, predicate, model):
         payload = self.connection.scalar(sa.select(table.c.payload).where(predicate))
         if payload is None:

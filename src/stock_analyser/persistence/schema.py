@@ -5,6 +5,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = sa.MetaData()
 
+universe_snapshots = sa.Table(
+    "universe_snapshots",
+    metadata,
+    sa.Column("snapshot_id", sa.Uuid, primary_key=True),
+    sa.Column("payload", JSONB, nullable=False),
+)
+
 securities = sa.Table(
     "securities",
     metadata,
