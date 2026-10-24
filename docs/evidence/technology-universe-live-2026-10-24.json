@@ -1,0 +1,243 @@
+{
+  "schema_version": "1",
+  "policy": {
+    "version": "us-technology-proposed-1",
+    "status": "evaluation_hypothesis",
+    "market": "US",
+    "sector": "technology",
+    "taxonomy": {
+      "source": "Yahoo sector",
+      "Technology": "technology"
+    },
+    "taxonomy_version": "yahoo-sector-map-1",
+    "other_known_sectors": [
+      "Basic Materials",
+      "Communication Services",
+      "Consumer Cyclical",
+      "Consumer Defensive",
+      "Energy",
+      "Financial Services",
+      "Healthcare",
+      "Industrials",
+      "Real Estate",
+      "Utilities"
+    ],
+    "eligible_type": "CS",
+    "venues": [
+      "XNAS",
+      "XNYS",
+      "ARCX",
+      "XASE",
+      "BATS"
+    ],
+    "currency": "USD",
+    "security_key": "share_class_figi; missing or conflicting identity blocks eligibility",
+    "listing_order": [
+      "XNAS",
+      "XNYS",
+      "ARCX",
+      "XASE",
+      "BATS"
+    ],
+    "listing_tie_breaker": "composite_figi, then provider ticker, ascending",
+    "minimum_price_usd": "5",
+    "minimum_average_traded_value_usd": "10000000",
+    "traded_value_sessions": 60,
+    "traded_value": "mean(unadjusted regular-session close * unadjusted share volume)",
+    "minimum_completed_daily_bars": 260,
+    "mandatory_history": "max(260, daily minimum+warmup); each mandatory weekly window separately",
+    "rank": "average traded value descending, immutable instrument UUID ascending",
+    "selection_count": 10,
+    "metadata_ttl_hours": 24,
+    "full_sector_accepted": false
+  },
+  "policy_sha256": "5a50f9173985edb5dabd1c05392f65dde45a3b9c62b64663c1bdf53df85d3141",
+  "started_at": "2026-10-24T14:44:24.327471+00:00",
+  "finished_at": "2026-10-24T14:44:51.418620+00:00",
+  "bounds": {
+    "max_pages_per_source": 2,
+    "profile_limit": 2,
+    "massive": {
+      "requests_per_minute": 5,
+      "timeout_seconds": 20.0,
+      "retries": 2,
+      "max_requests": 100,
+      "max_retry_delay_seconds": 120.0,
+      "page_size": 50000,
+      "news_page_size": 100,
+      "news_max_pages": 3,
+      "news_lookback_days": 7
+    }
+  },
+  "versions": {
+    "yfinance": "0.2.66",
+    "source": {
+      "package_version": "0.1.0",
+      "commit": "5126a6b428eb396f39bfe641c8d0189b171845ae",
+      "dirty": true
+    },
+    "implementation_sha256": "84430d3b11fc3d0b858f12f10fa49bba4de11189a86b2b41fe877481371d439b"
+  },
+  "measured": {
+    "reference": {
+      "source": "massive",
+      "query": {
+        "market": "stocks",
+        "locale": "us",
+        "active": "true",
+        "limit": 1000,
+        "sort": "ticker",
+        "order": "asc"
+      },
+      "status": "TRUNCATED",
+      "reason": "PAGE_LIMIT",
+      "reported_total": null,
+      "unique_rows": 2000,
+      "pages": [
+        {
+          "rows": 1000,
+          "sha256": "93c5864be850a384dda7a0a247d24fd2f3e28f11a2f6ba829320679e232cfde0",
+          "retrieved_at": "2026-10-24T14:44:38.145918+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "8fb35010c2129284c0fe5e3c35460902b9cd1372bc3e1544d853eedbd7c9091f",
+          "retrieved_at": "2026-10-24T14:44:49.969871+00:00",
+          "has_next": true
+        }
+      ],
+      "sdk_calls_attempted": null,
+      "metadata_sha256": "ce6fdec069a32e0c8ecfcad1222d9c0226b675cf083012beb61e3cb2e3bffdfa",
+      "scope": "provider query at retrieval time; not full-sector coverage"
+    },
+    "discovery": {
+      "source": "yfinance",
+      "query": {
+        "region": "us",
+        "sector": "Technology",
+        "size": 250,
+        "sortField": "ticker",
+        "sortAsc": true
+      },
+      "status": "TRUNCATED",
+      "reason": "PAGE_LIMIT",
+      "reported_total": 2102,
+      "unique_rows": 500,
+      "pages": [
+        {
+          "offset": 0,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "ffd2a5872ec7fa575f9bda558f63105bd18fbefe0a94658aa5a203bc24fa45b2",
+          "retrieved_at": "2026-10-24T14:44:50.401553+00:00"
+        },
+        {
+          "offset": 250,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "b7cb0fe30b60e35d31bbab8ee91375f54cbf37f64a418bdf6196aebf976e4891",
+          "retrieved_at": "2026-10-24T14:44:50.882361+00:00"
+        }
+      ],
+      "sdk_calls_attempted": 2,
+      "metadata_sha256": "2a689a9f28676617068516b3d6fbb5142e7b4c0a2af49cd94d08e988e4a636b5",
+      "scope": "provider query at retrieval time; not full-sector coverage"
+    },
+    "profiles": {
+      "attempted": 2,
+      "classified_technology": 2,
+      "other_sector": 0,
+      "unknown_or_failed": 0,
+      "scope": "alphabetical bounded sample, not coverage proof",
+      "observations": [
+        {
+          "sha256": "2d5815f6e1afb58d63465082943b28d6560a80635f9454e1b28d6d5e86cd4601",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T14:44:51.162849+00:00"
+        },
+        {
+          "sha256": "952bfd09917e8b9ea2faebef1913a4e2f69a6f1a5f87e1dfc6f42817362f2d03",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T14:44:51.408392+00:00"
+        }
+      ]
+    },
+    "reconciliation": {
+      "reference_exclusions": {
+        "NON_COMMON_OR_UNKNOWN_TYPE": 1122,
+        "UNKNOWN_LISTING_IDENTITY": 425,
+        "UNKNOWN_SECURITY_IDENTITY": 455
+      },
+      "exclusion_counts_overlap": true,
+      "eligible_listings_before_dedup": 685,
+      "distinct_candidate_securities": 685,
+      "duplicate_listings_removed": 0,
+      "discovery_exact_symbol_matches": 149,
+      "discovery_unmatched_symbols": 351,
+      "discovery_eligible_security_matches": 107,
+      "eligible_securities_outside_discovery": 578,
+      "classification_completeness": "UNVERIFIED; absence from discovery is not non-Technology",
+      "symbol_mapping": "Exact only; punctuation, rename and venue differences need verification"
+    },
+    "elapsed_seconds": 27.171,
+    "massive_http_responses": [
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T14:44:38.135502+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T14:44:49.961954+00:00",
+        "attempt": 1
+      }
+    ],
+    "yahoo_http_requests": null,
+    "price_history_requests": 0
+  },
+  "estimated_workload": {
+    "kind": "estimate_only",
+    "unit": "logical provider calls; SDK HTTP amplification unknown",
+    "inputs": {
+      "reference_pages": 2,
+      "discovery_pages": 2,
+      "candidate_securities": 685,
+      "sector_candidates": 500,
+      "selected": 10,
+      "benchmark": 1,
+      "profile_calls_per_candidate": 1,
+      "price_pages_per_candidate": 1,
+      "action_pages_per_selected_and_benchmark": 2,
+      "news_pages_per_selected": 1
+    },
+    "cold_start": 1222,
+    "warm_next_session_metadata_fresh": 533,
+    "warm_after_metadata_ttl": 1222,
+    "warm_exact_snapshot_replay": 0,
+    "cold_upper_scenario_two_retries_and_three_pages": 10998,
+    "assumptions": [
+      "All candidate securities need classification, not only discovery matches",
+      "Every sector candidate refreshes for ranking, not only the selected 10",
+      "260 daily bars plus independently resolved mandatory weekly warmup",
+      "One daily union-history call; valid only if chosen source covers the window",
+      "Actions/news estimate assumes 10 selections; zero forward-earnings coverage",
+      "No failed calls, retries, paging, or SDK authentication in base estimates",
+      "Metadata TTL 24h; warm price refresh includes five overlapping sessions"
+    ]
+  },
+  "estimate_input_status": "observed counts; lower bounds when enumeration failed/truncated",
+  "gate": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "CLASSIFICATION_COMPLETENESS_UNVERIFIED",
+      "CROSS_SOURCE_IDENTITY_MAPPING_UNVERIFIED",
+      "HISTORY_AND_LIQUIDITY_NOT_MEASURED",
+      "RETENTION_RIGHTS_UNVERIFIED",
+      "REFERENCE_ENUMERATION_INCOMPLETE",
+      "DISCOVERY_ENUMERATION_INCOMPLETE"
+    ]
+  },
+  "retention": "Aggregate counts and allowlisted metadata hashes; no raw rows or cursors"
+}
