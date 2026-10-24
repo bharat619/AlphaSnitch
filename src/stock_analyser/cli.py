@@ -146,6 +146,54 @@ def initialize(ctx: typer.Context) -> None:
     display("Runtime directories and PostgreSQL schema are ready.")
 
 
+@app.command("qualify-universe")
+def qualify_universe(
+    ctx: typer.Context,
+    output: Path = typer.Option(..., help="New directory for aggregate coverage findings."),
+    max_pages: int = typer.Option(40, min=1, max=100),
+    profile_limit: int = typer.Option(10, min=0, max=25),
+) -> None:
+    """Run the bounded live US Technology coverage spike; FAIL keeps the sector gate closed."""
+    from platformdirs import user_data_path
+
+    from stock_analyser.config import load_massive_key
+    from stock_analyser.massive import live_client
+    from stock_analyser.universe_spike import run_spike
+
+    try:
+        import yfinance as yf
+
+        if output.exists():
+            raise ValueError(
+                "Choose a new output directory; previous findings cannot be overwritten"
+            )
+        query = yf.EquityQuery(
+            "and",
+            [
+                yf.EquityQuery("eq", ["region", "us"]),
+                yf.EquityQuery("eq", ["sector", "Technology"]),
+            ],
+        )
+
+        def screen(offset, size):
+            return yf.screen(query, offset=offset, size=size, sortField="ticker", sortAsc=True)
+
+        def profile(symbol):
+            return yf.Ticker(symbol).get_info()
+
+        lock_path = user_data_path("stock-analyser", appauthor=False) / "massive.lock"
+        with live_client(load_massive_key(), ctx.obj.massive, lock_path) as client:
+            report = run_spike(
+                client, screen, profile, output, max_pages=max_pages, profile_limit=profile_limit
+            )
+    except Exception as exc:
+        fail(exc)
+    display(f"Coverage findings saved: {output / 'findings.json'}")
+    display("Full-sector acceptance: " + report["gate"]["status"])
+    if not report["gate"]["full_sector_accepted"]:
+        raise typer.Exit(1)
+
+
 def initialize_database(runtime: Runtime) -> None:
     if runtime.database_url is None:
         raise ConfigurationError("Set STOCK_ANALYSER_DATABASE_URL before running init.")
