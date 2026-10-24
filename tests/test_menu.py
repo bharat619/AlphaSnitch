@@ -16,7 +16,7 @@ from stock_analyser.config import load_runtime
         (["\x1b[B\r", "6\r"], "Sell is unavailable"),
         (["\x1b[B\r", "\x1b[A\r", "6\r"], "Buy collection started"),
         (["\x1b[A\r"], None),
-        (["4\r", "6\r"], "Record offline trade is unavailable"),
+        (["4\r", "6\r"], "Trade recording started"),
         (["\x03"], "interrupt"),
     ],
 )
@@ -28,6 +28,7 @@ def test_interactive_menu_keyboard_navigation(monkeypatch, tmp_path, keys, expec
     config = tmp_path / "config.toml"
     config.write_text('market = "US"')
     runtime = load_runtime(config, data_dir=tmp_path / "runtime")
+    monkeypatch.setattr(cli, "prompt_trade", lambda *a: cli.display("Trade recording started"))
     select = cli.questionary.select
     sequences = iter(keys)
     defaults = []

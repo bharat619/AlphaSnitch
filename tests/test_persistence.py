@@ -6,6 +6,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -52,7 +53,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0005"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -1890,3 +1891,151 @@ def test_buy_cli_frozen_superset_and_independent_benchmark(
     )
     assert all(s["status"] == "SUCCEEDED" for s in report["collection_stages"])
     assert report["report"]["stages"]["verdict"] == "NOT_RUN"
+
+
+def ledger_instrument(database):
+    from stock_analyser.contracts import Instrument
+
+    database.initialize()
+    security = Security(security_id=uuid4(), name="Ledger fixture")
+    instrument = Instrument(
+        instrument_id=uuid4(),
+        security_id=security.security_id,
+        market_id="US",
+        venue="XNAS",
+        symbol="LEDGER",
+        quote_currency="USD",
+    )
+    with database.write() as repo:
+        repo.put_security(security)
+        repo.put_instrument(instrument)
+    return instrument
+
+
+def ledger_trade(instrument, side="BUY", quantity="10", price="100", **kwargs):
+    from stock_analyser.ledger import TradeConfirmation
+
+    return TradeConfirmation(
+        instrument_id=instrument.instrument_id,
+        venue=instrument.venue,
+        side=side,
+        quantity=quantity,
+        price=price,
+        currency="USD",
+        executed_at=datetime(2025, 1, 1, tzinfo=UTC),
+        idempotency_key=str(uuid4()),
+        **kwargs,
+    )
+
+
+def test_ledger_restart_idempotency_and_conflict(database):
+    from stock_analyser.ledger import execution_receipt, portfolio, record_execution
+
+    instrument = ledger_instrument(database)
+    purchase = ledger_trade(instrument)
+    bought = record_execution(database, purchase)
+    sale = ledger_trade(instrument, "SELL", "4", "110")
+    sold = record_execution(database, sale)
+    database.close()  # Force a new database connection and decode the persisted Decimal strings.
+    assert record_execution(database, purchase) == bought
+    assert record_execution(database, sale) == sold
+    assert execution_receipt(database, sale.idempotency_key) == sold
+    (position,) = portfolio(database)
+    assert (position.quantity, position.cost_basis, position.realized_pnl) == (6, 600, 40)
+    with pytest.raises(ValueError, match="Idempotency"):
+        record_execution(database, sale.model_copy(update={"price": Decimal("111")}))
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_execution(database, ledger_trade(instrument, "SELL", "7"))
+    with database.read() as repo:
+        assert repo.connection.scalar(sa.select(sa.func.count()).select_from(s.executions)) == 2
+        payloads = repo.connection.scalars(sa.select(s.executions.c.payload)).all()
+        assert all(isinstance(p["confirmation"]["price"], str) for p in payloads)
+
+
+def test_competing_sales_and_duplicate_confirmation(database):
+    from stock_analyser.ledger import portfolio, record_execution
+
+    instrument = ledger_instrument(database)
+    buy = ledger_trade(instrument)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        receipts = list(workers.map(lambda _: record_execution(database, buy), range(2)))
+    assert receipts[0] == receipts[1]
+
+    def sell(_):
+        try:
+            record_execution(database, ledger_trade(instrument, "SELL", "7"))
+            return "recorded"
+        except ValueError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        assert sorted(workers.map(sell, range(2))) == ["recorded", "rejected"]
+    assert portfolio(database)[0].quantity == 3
+
+
+def test_backdated_oversell_rejected_and_instrument_isolation(database):
+    from stock_analyser.ledger import portfolio, record_execution
+
+    first = ledger_instrument(database)
+    second = ledger_instrument(database)
+    record_execution(database, ledger_trade(first))
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_execution(database, ledger_trade(second, "SELL", "1"))
+    backdated = ledger_trade(first, "SELL", "1").model_copy(
+        update={"executed_at": datetime(2024, 1, 1, tzinfo=UTC)}
+    )
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_execution(database, backdated)
+    assert len(portfolio(database)) == 1
+
+
+def test_trade_cli_confirmation_cancellation_and_receipt(database, tmp_path, monkeypatch):
+    from stock_analyser.ledger import execution_receipt, portfolio
+
+    instrument = ledger_instrument(database)
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    runner = CliRunner()
+    file = tmp_path / "trade.json"
+    purchase = ledger_trade(instrument)
+    file.write_text(purchase.model_dump_json())
+    result = runner.invoke(app, ["record-trade", "--input", str(file)], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Confirm actual offline execution" in result.output and "Cancelled" in result.output
+    assert portfolio(database) == []
+    for confirmation in (purchase, ledger_trade(instrument, "SELL", "4", "110")):
+        file.write_text(confirmation.model_dump_json())
+        result = runner.invoke(app, ["record-trade", "--input", str(file)], input="y\n")
+        assert result.exit_code == 0, result.output
+        receipt = execution_receipt(database, confirmation.idempotency_key)
+        repeated = runner.invoke(app, ["record-trade", "--input", str(file)], input="y\n")
+        assert repeated.exit_code == 0 and repeated.output == result.output
+        assert execution_receipt(database, confirmation.idempotency_key) == receipt
+    result = runner.invoke(app, ["portfolio"])
+    assert result.exit_code == 0 and '"quantity": "6"' in result.output
+    result = runner.invoke(app, ["execution-receipt", confirmation.idempotency_key])
+    assert result.exit_code == 0 and str(receipt.execution_id) in result.output
+
+
+def test_ledger_lossless_fee_storage_and_missing_fx(database):
+    from stock_analyser.ledger import Fee, execution_receipt, portfolio, record_execution
+
+    instrument = ledger_instrument(database)
+    confirmation = ledger_trade(
+        instrument,
+        quantity="0.12345678",
+        price="12345678.12345678",
+        fees=(Fee(amount="0.00000001", currency="EUR"),),
+    )
+    receipt = record_execution(database, confirmation)
+    database.close()
+    restored = execution_receipt(database, confirmation.idempotency_key)
+    assert restored == receipt
+    assert str(restored.confirmation.quantity) == "0.12345678"
+    assert str(restored.confirmation.price) == "12345678.12345678"
+    assert restored.confirmation.fees[0].currency == "EUR"
+    assert str(restored.confirmation.fees[0].amount) == "1E-8"
+    (position,) = portfolio(database)
+    assert position.quantity == confirmation.quantity
+    assert position.cost_basis is None and not position.accounting_complete

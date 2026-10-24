@@ -126,3 +126,13 @@ research_records = sa.Table(
     ),
     sa.Column("payload", JSONB, nullable=False),
 )
+
+executions = sa.Table(
+    "executions",
+    metadata,
+    sa.Column("sequence", sa.BigInteger, sa.Identity(), primary_key=True),
+    sa.Column("execution_id", sa.Uuid, nullable=False, unique=True),
+    sa.Column("instrument_id", sa.Uuid, sa.ForeignKey("instruments.instrument_id"), nullable=False),
+    sa.Column("idempotency_key", sa.Text, nullable=False, unique=True),
+    sa.Column("payload", JSONB, nullable=False),
+)

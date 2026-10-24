@@ -58,6 +58,12 @@ class Instrument(Contract):
     symbol: Text
     series: Text = "common"
     quote_currency: Currency
+    quantity_increment: Decimal = Field(
+        default=Decimal("0.00000001"), gt=0, max_digits=28, decimal_places=8
+    )
+    price_increment: Decimal = Field(
+        default=Decimal("0.00000001"), gt=0, max_digits=28, decimal_places=8
+    )
     provider_symbols: tuple[SymbolMapping, ...] = ()
 
     @model_validator(mode="after")
