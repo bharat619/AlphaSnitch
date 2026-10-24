@@ -42,11 +42,12 @@ def test_help_is_available_without_config_or_credentials(monkeypatch):
 
 
 def test_menu_and_unavailable_workflow(tmp_path):
-    result = runner.invoke(app, ["--data-dir", str(tmp_path / "runtime")], input="1\n6\n")
+    result = runner.invoke(app, ["--data-dir", str(tmp_path / "runtime")], input="2\n6\n")
     assert result.exit_code == 0
     for label in ("Buy", "Sell", "Portfolio", "Record offline trade", "Reports", "Exit"):
         assert label in result.output
-    assert "Buy is unavailable" in result.output
+    assert "Sell is unavailable" in result.output
+    assert "Buy [unavailable" not in result.output
     assert "active market: US" in result.output
     assert not (tmp_path / "runtime").exists()
 

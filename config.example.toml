@@ -5,6 +5,7 @@
 # PostgreSQL connection credentials belong in .env or shell environment variables:
 # STOCK_ANALYSER_DATABASE_URL='postgresql+psycopg://user:password@127.0.0.1:5432/database'
 market = "US"
+stock_concurrency = 2 # Maximum concurrent stock collection jobs (1–16).
 
 [paths]
 # data_dir = "/absolute/path/to/stock-analyser"

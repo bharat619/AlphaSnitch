@@ -137,6 +137,27 @@ def render_markdown(data: ReportInput) -> bytes:
             f"- Collection {stage.instrument_id or 'run'}: {stage.status}; "
             f"{stage.reason or 'no failure reason'}"
         )
+    buy = run.configuration.get("buy_collection")
+    if buy:
+        lines.extend(
+            [
+                "## Buy collection scope",
+                "",
+                f"Sector: {buy['sector']}; selection policy: {buy['policy_version']}",
+                f"Selection outcome: {buy['selection_outcome']}; shortfall: {buy['shortfall']}",
+                "PROTOTYPE: incomplete sector coverage; full-sector top-ten scan not completed.",
+                f"Enumeration complete: {buy['enumeration_complete']}; unresolved classifications: "
+                + ", ".join(buy["unresolved_classifications"]),
+                f"Configured stock concurrency: {buy['stock_concurrency']}",
+                "Holdings unchanged. Indicators, strategy and agent verdicts: NOT_RUN.",
+            ]
+        )
+        for context in buy["shared_context"]:
+            lines.append(
+                f"Shared context {context['key']}: {context['status']}; "
+                f"run {context['run_id']}; collected once for reuse"
+            )
+        lines.append("")
     lines.extend(["", "## History and source coverage", ""])
     if run.price_routing is not None:
         selection = run.price_routing

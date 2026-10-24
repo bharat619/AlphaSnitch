@@ -29,6 +29,85 @@ report_app = typer.Typer(help="Browse, reopen, and regenerate saved data-readine
 app.add_typer(report_app, name="report")
 universe_app = typer.Typer(help="Select and replay an explicit prototype sector population.")
 app.add_typer(universe_app, name="universe")
+scan_app = typer.Typer(help="Collect sector evidence without producing recommendations.")
+app.add_typer(scan_app, name="scan")
+
+
+def run_buy(runtime, sector, input_path=None, fixture=None):
+    from uuid import uuid4
+
+    from stock_analyser.buy import FrozenPriceProvider, collect_buy
+    from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.universe import SelectionPolicy, SelectionRequest, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    if sector.lower() != "technology":
+        raise ValueError("Only technology is supported by the current selection policy")
+    if (input_path is None) == (fixture is None):
+        raise ValueError(
+            "Choose --input frozen-selection.json or --fixture valid. "
+            "Live full-sector coverage remains unqualified (US-011)."
+        )
+    if fixture is not None:
+        if fixture not in ("valid", "zero", "shortfall", "one-stock-failure", "unassessable"):
+            raise ValueError("Unknown buy fixture scenario")
+        request, resolver = fixture_request(
+            runtime.snapshots_dir / "buy-fixtures" / str(uuid4()),
+            eligible_count=0 if fixture == "zero" else 3 if fixture == "shortfall" else 12,
+            policy=SelectionPolicy(minimum_price_usd=100) if fixture == "zero" else None,
+        )
+
+        class BuyFixtureProvider(RawFixtureProvider):
+            failure_symbol = None
+
+            def fetch(self, instrument, market, resolution):
+                scenario = "valid"
+                if instrument.symbol == self.failure_symbol:
+                    scenario = {
+                        "one-stock-failure": "provider-failure",
+                        "unassessable": "missing-bar",
+                    }.get(fixture, "valid")
+                return RawFixtureProvider(scenario).fetch(instrument, market, resolution)
+
+        provider = BuyFixtureProvider()
+    else:
+        request = SelectionRequest.model_validate_json(input_path.read_bytes())
+        resolver = HistoryResolver(ExchangeCalendarAdapter(), request.cutoff_policy)
+        provider = FrozenPriceProvider(request.histories)
+    snapshot = select_universe(request, resolver)
+    if fixture and snapshot.result.selected:
+        provider.failure_symbol = snapshot.result.selected[0].symbol
+    database = report_database(runtime)
+    try:
+        database.initialize()
+        run_id, status, artifacts = collect_buy(
+            database, runtime, snapshot, provider, progress=display
+        )
+        display(f"Run: {run_id}; collection: {status.value}; report saved")
+        for artifact in artifacts:
+            display(f"{artifact.name}: {artifact.reference}")
+        return status
+    finally:
+        database.close()
+
+
+@scan_app.command("buy")
+def scan_buy(
+    ctx: typer.Context,
+    sector: str = typer.Option(..., help="Sector: technology."),
+    input_path: Path | None = typer.Option(None, "--input", help="Frozen SelectionRequest JSON."),
+    fixture: str | None = typer.Option(
+        None, help="valid, zero, shortfall, one-stock-failure, unassessable"
+    ),
+) -> None:
+    """Save collection outcomes for every selected stock in an explicit prototype population."""
+    try:
+        status = run_buy(ctx.obj, sector, input_path, fixture)
+    except Exception as exc:
+        fail(exc)
+    if status.value != "SUCCEEDED":
+        raise typer.Exit(1)
 
 
 def display_universe(snapshot) -> None:
@@ -131,7 +210,7 @@ def universe_replay(
 
 
 def workflow_label(name: str) -> str:
-    return name if name == "Reports" else f"{name} [unavailable — not implemented]"
+    return name if name in ("Buy", "Reports") else f"{name} [unavailable — not implemented]"
 
 
 def display(message: str) -> None:
@@ -182,6 +261,25 @@ def menu(runtime: Runtime) -> None:
                     display_report_history(runtime)
                     display("Open: stock-analyser report show <run-id>")
                     display("Retry: stock-analyser report regenerate <run-id>")
+                except Exception as exc:
+                    display(f"Error: {safe_error(exc)}")
+            elif choice == "1":
+                try:
+                    sector = Prompt.ask("Sector", console=console, default="technology")
+                    source = Prompt.ask(
+                        "Frozen selection JSON path or fixture scenario "
+                        "(valid/zero/shortfall/one-stock-failure/unassessable)",
+                        console=console,
+                    )
+                    scenarios = {"valid", "zero", "shortfall", "one-stock-failure", "unassessable"}
+                    run_buy(
+                        runtime,
+                        sector,
+                        None if source in scenarios else Path(source),
+                        source if source in scenarios else None,
+                    )
+                except EOFError:
+                    return
                 except Exception as exc:
                     display(f"Error: {safe_error(exc)}")
             else:

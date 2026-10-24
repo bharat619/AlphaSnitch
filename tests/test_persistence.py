@@ -1593,3 +1593,157 @@ def test_routed_prices_freeze_one_source_and_reopen_reports(
         assert len(original) == len(new) == 4
         assert not original.intersection(new)
         assert calls == ["AAPL", "SPY", "AAPL", "SPY"]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "count", "exit_code", "outcome"),
+    [
+        ("valid", 10, 0, "TEN_SELECTED"),
+        ("zero", 0, 0, "NO_ELIGIBLE_STOCKS"),
+        ("shortfall", 3, 0, "FEWER_THAN_TEN"),
+        ("one-stock-failure", 10, 1, "TEN_SELECTED"),
+        ("unassessable", 10, 1, "TEN_SELECTED"),
+    ],
+)
+def test_buy_cli_saved_sector_outcomes(
+    database, tmp_path, monkeypatch, scenario, count, exit_code, outcome
+):
+    import threading
+    import time
+    from collections import Counter
+
+    from stock_analyser.collection import CollectionService
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.reports import ReportService
+
+    lock = threading.Lock()
+    active = peak = 0
+    provider_active = provider_peak = 0
+    calls = Counter()
+    original_collect = CollectionService.collect
+    original_fetch = RawFixtureProvider.fetch
+
+    def observed_collect(self, run_id, instrument, provider, **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.01)
+            return original_collect(self, run_id, instrument, provider, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    def observed_fetch(self, instrument, market, resolution):
+        nonlocal provider_active, provider_peak
+        with lock:
+            calls[instrument.symbol] += 1
+            provider_active += 1
+            provider_peak = max(provider_peak, provider_active)
+        try:
+            time.sleep(0.001)
+            return original_fetch(self, instrument, market, resolution)
+        finally:
+            with lock:
+                provider_active -= 1
+
+    monkeypatch.setattr(CollectionService, "collect", observed_collect)
+    monkeypatch.setattr(RawFixtureProvider, "fetch", observed_fetch)
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    config = tmp_path / "config.toml"
+    config.write_text('market = "US"\nstock_concurrency = 3\n')
+    result = CliRunner().invoke(
+        app,
+        [
+            "--config",
+            str(config),
+            "--data-dir",
+            str(tmp_path),
+            "scan",
+            "buy",
+            "--sector",
+            "technology",
+            "--fixture",
+            scenario,
+        ],
+    )
+    assert result.exit_code == exit_code, result.output
+    with database.read() as repo:
+        runs = repo.list_runs(100)
+        run = next(r for r in runs if "buy_collection" in r.configuration)
+        stages = repo.list_stages(run.run_id)
+        stocks = [repo.get_instrument(i) for i in run.request.instrument_ids]
+    service = ReportService(database, tmp_path / "reports")
+    report = json.loads(service.show(run.run_id, "report.json"))
+    markdown = service.show(run.run_id)
+    scope = report["run"]["configuration"]["buy_collection"]
+    assert scope["selection_outcome"] == outcome
+    assert scope["stock_concurrency"] == 3
+    assert scope["full_sector_accepted"] is False
+    assert len(report["instruments"]) == count
+    assert len(stages) == count
+    assert peak <= 3
+    if count:
+        assert peak > 1
+        assert calls["INDEX"] == 1
+        assert provider_peak == 1
+    assert len(scope["shared_context"]) == (1 if count else 0)
+    if count:
+        assert scope["shared_context"][0]["status"] == "SUCCEEDED"
+        assert len(scope["shared_context"][0]["snapshots"]) == 1
+    assert "full-sector top-ten scan not completed" in markdown
+    assert "Holdings unchanged" in markdown
+    assert "policy: us-technology-selection-1" in result.output
+    assert "currency: USD" in result.output
+    assert "cutoff: 2026-10-16" in result.output
+    for stock in stocks:
+        assert stock.symbol in markdown
+    failed = [s for s in stages if s.status == OperationalStatus.FAILED]
+    assert len(failed) == (1 if exit_code else 0)
+    assert report["report"]["stages"]["verdict"] == "NOT_RUN"
+    before = service.show(run.run_id)
+    service.generate(run.run_id)
+    assert service.show(run.run_id) == before
+
+
+def test_buy_cli_frozen_input_discloses_missing_benchmark(database, tmp_path, monkeypatch):
+    from stock_analyser.reports import ReportService
+    from stock_analyser.universe_demo import fixture_request
+
+    request, resolver = fixture_request(tmp_path / "frozen", eligible_count=3)
+    input_path = tmp_path / "selection.json"
+    input_path.write_text(request.model_dump_json())
+    monkeypatch.setattr(
+        "stock_analyser.calendars.ExchangeCalendarAdapter", lambda: resolver.calendar
+    )
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "--data-dir",
+            str(tmp_path),
+            "scan",
+            "buy",
+            "--sector",
+            "technology",
+            "--input",
+            str(input_path),
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert "report saved" in result.output
+    with database.read() as repo:
+        run = next(r for r in repo.list_runs(100) if "buy_collection" in r.configuration)
+    report = json.loads(
+        ReportService(database, tmp_path / "reports").show(run.run_id, "report.json")
+    )
+    assert len(report["instruments"]) == 3
+    assert all(s["status"] == "SUCCEEDED" for s in report["collection_stages"])
+    assert run.status == OperationalStatus.PARTIAL
+    assert run.configuration["buy_collection"]["shared_context"][0]["status"] == "FAILED"
+    assert "shared context failures" in run.reason
