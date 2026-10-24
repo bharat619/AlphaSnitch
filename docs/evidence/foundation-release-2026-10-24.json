@@ -1,15 +1,19 @@
 {
   "schema_version": "1",
-  "recorded_at": "2026-10-24T13:15:17.368693+00:00",
-  "source_commit": "ff27dc395c42aec3e13c4a7e55dab51b214ad74f",
+  "recorded_at": "2026-10-24T13:45:19.942865+00:00",
+  "source_commit": "536b1271d2a716f28f47b023be4a9681159f41a5",
   "source_tracked_dirty": false,
   "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
   "fixture_readiness": {
-    "tests": 470,
+    "tests": 472,
     "failure": 0,
     "error": 0,
     "skipped": 0,
     "passed": true,
+    "expected_tests": 472,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "bae0fbd6e0c0f6e9d36944b950c4b0835a699a02c5630b0f874c7fe20a4a7bf9",
     "process": {
       "exit_code": 0,
       "timed_out": false
