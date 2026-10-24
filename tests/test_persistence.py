@@ -2488,6 +2488,9 @@ def test_sell_scan_freezes_revision_and_shared_provider(database, tmp_path, monk
     changed = False
 
     class ObservedProvider(RawFixtureProvider):
+        def collection_identity(self):
+            return {"version": "observed-fixture-1", "scenario": "valid"}
+
         def fetch(self, instrument, market, resolution):
             nonlocal active, peak, changed
             with gate:
@@ -2680,16 +2683,19 @@ def test_resume_sell_after_two_instruments_preserves_original_inputs(
     calls = Counter()
     observations = []
 
-    class ObservedProvider(RawFixtureProvider):
-        def fetch(self, instrument, market, resolution):
-            calls[instrument.instrument_id] += 1
-            observations.append((instrument, market, resolution))
-            return super().fetch(instrument, market, resolution)
+    original_fetch = RawFixtureProvider.fetch
+
+    def observed_fetch(self, instrument, market, resolution):
+        calls[instrument.instrument_id] += 1
+        observations.append((instrument, market, resolution))
+        return original_fetch(self, instrument, market, resolution)
+
+    monkeypatch.setattr(RawFixtureProvider, "fetch", observed_fetch)
 
     # A new Database object discards every in-memory collector/provider object.
     restarted = Database(database.engine.url.render_as_string(hide_password=False))
     try:
-        result = execute_plan(restarted, runtime, run.run_id, ObservedProvider())
+        result = execute_plan(restarted, runtime, run.run_id)
         assert result[0] == run.run_id and result[1] == OperationalStatus.SUCCEEDED
         with restarted.read() as repo:
             resumed = repo.get_run(run.run_id)
@@ -2868,6 +2874,42 @@ def test_resume_buy_frozen_evidence_and_new_policy_create_new_runs(database, tmp
         parent = next(r for r in repo.list_runs(100) if "resume_plan" in r.configuration)
         old_refs = repo.list_snapshots(parent.run_id)
         original_children = parent.configuration["buy_collection"]["child_run_ids"]
+    # Replacement histories or a different adapter must be rejected before any
+    # report retirement, attempt increment, evidence attachment, or status write.
+    with database.read() as repo:
+        before_runs = repo.list_runs(100)
+        before_state = tuple(
+            (
+                r.run_id,
+                repo.list_stages(r.run_id),
+                repo.list_snapshots(r.run_id),
+                repo.list_artifacts(r.run_id),
+            )
+            for r in before_runs
+        )
+        before_report = repo.get_report_input(parent.run_id)
+    before_files = {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    from stock_analyser.fixtures import RawFixtureProvider
+
+    for replacement in (FrozenPriceProvider(request.histories[1:]), RawFixtureProvider()):
+        with pytest.raises(ValueError, match="requires a new run"):
+            execute_plan(database, runtime, parent.run_id, replacement)
+    with database.read() as repo:
+        assert repo.list_runs(100) == before_runs
+        assert (
+            tuple(
+                (
+                    r.run_id,
+                    repo.list_stages(r.run_id),
+                    repo.list_snapshots(r.run_id),
+                    repo.list_artifacts(r.run_id),
+                )
+                for r in before_runs
+            )
+            == before_state
+        )
+        assert repo.get_report_input(parent.run_id) == before_report
+    assert {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before_files
     # No input filename, universe re-selection, calendar re-resolution or provider
     # construction is needed after restart: only the persisted plan is read.
     result = subprocess.run(
@@ -2932,3 +2974,58 @@ def test_resume_buy_frozen_evidence_and_new_policy_create_new_runs(database, tmp
         context_stage = repo.list_stages(context_id)[0]
         assert context_stage.attempts == {"daily": 3}
         assert "budget exhausted" in context_stage.reason
+
+
+def test_resume_external_provider_requires_original_configuration(database, tmp_path):
+    from stock_analyser.buy import collect_buy
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.resume import execute_plan, provider_recipe
+    from stock_analyser.universe import select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    class ExternalProvider(RawFixtureProvider):
+        def __init__(self, revision):
+            super().__init__()
+            self.revision = revision
+
+        def collection_identity(self):
+            return {"adapter_version": "1", "data_revision": self.revision, "scenario": "valid"}
+
+    with pytest.raises(ValueError, match="collection_identity"):
+        provider_recipe(object())
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs", eligible_count=1)
+    runtime = load_runtime(data_dir=tmp_path).model_copy(update={"stock_concurrency": 1})
+
+    def interrupt(message):
+        if message.startswith("Collection 1/"):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        collect_buy(
+            database,
+            runtime,
+            select_universe(request, resolver),
+            ExternalProvider("v1"),
+            history_resolver=resolver,
+            progress=interrupt,
+        )
+    with database.read() as repo:
+        run = next(r for r in repo.list_runs(100) if "resume_plan" in r.configuration)
+        artifacts = repo.list_artifacts(run.run_id)
+        stages = repo.list_stages(run.run_id)
+        snapshots = repo.list_snapshots(run.run_id)
+        report = repo.get_report_input(run.run_id)
+    assert run.configuration["resume_plan"]["provider"]["configuration"]["data_revision"] == "v1"
+    for provider in (ExternalProvider("v2"), None):
+        with pytest.raises(ValueError, match="new run|original identified"):
+            execute_plan(database, runtime, run.run_id, provider)
+    with database.read() as repo:
+        assert repo.get_run(run.run_id) == run
+        assert repo.list_artifacts(run.run_id) == artifacts
+        assert repo.list_stages(run.run_id) == stages
+        assert repo.list_snapshots(run.run_id) == snapshots
+        assert repo.get_report_input(run.run_id) == report
+    _, status, _ = execute_plan(database, runtime, run.run_id, ExternalProvider("v1"))
+    assert status == OperationalStatus.SUCCEEDED

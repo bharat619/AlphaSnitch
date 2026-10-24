@@ -124,4 +124,10 @@ def collect_sell(
     )
     with database.write() as repo:
         repo.create_run(run)
-    return execute_plan(database, runtime, run.run_id, provider, progress=progress)
+    return execute_plan(
+        database,
+        runtime,
+        run.run_id,
+        provider if plan.provider["kind"] == "external" else None,
+        progress=progress,
+    )

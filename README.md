@@ -758,7 +758,12 @@ configuration versions. It does not reselect from the current universe or ledger
 Frozen input references and their hashes are retained in the plan; keep their
 source files available. Fixture plans can also be resumed without the old CLI
 arguments. Custom Python provider adapters must be supplied again to
-`stock_analyser.resume.execute_plan`.
+`stock_analyser.resume.execute_plan`, with the same adapter class and non-secret,
+JSON-serializable configuration returned by `collection_identity()`. That identity
+must include every version, input reference/hash and request policy that affects
+evidence. Missing or changed adapter identities require a fresh scan. Built-in
+frozen and fixture adapters are restored exclusively from the saved recipe;
+caller-supplied replacements must match it and are never executed.
 
 Each completed immutable history is verified and reused, including histories
 completed before an instrument was interrupted. Only incomplete history requests

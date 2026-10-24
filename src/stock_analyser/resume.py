@@ -1,11 +1,12 @@
 """Durable batch collection plans, independent of the current universe and ledger."""
 
+import json
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from uuid import UUID
 
 from pydantic import Field
 
-from stock_analyser.collection import CollectionService
+from stock_analyser.collection import CollectionService, encode
 from stock_analyser.contracts import Contract, Instrument, OperationalStatus
 from stock_analyser.persistence.records import StageRecord
 from stock_analyser.reports import ReportService
@@ -30,14 +31,24 @@ def provider_recipe(provider):
     from stock_analyser.buy import FrozenPriceProvider
     from stock_analyser.fixtures import RawFixtureProvider
 
-    if isinstance(provider, FrozenPriceProvider):
+    if type(provider) is FrozenPriceProvider:
         return {
             "kind": "frozen",
             "histories": [r.model_dump(mode="json") for r in provider.histories],
         }
     if type(provider) is RawFixtureProvider:
         return {"kind": "fixture", "scenario": provider.scenario}
-    return {"kind": "external"}
+    identity = getattr(provider, "collection_identity", None)
+    configuration = identity() if callable(identity) else None
+    if not isinstance(configuration, dict) or not configuration:
+        raise ValueError(
+            "External collection adapters require a stable collection_identity() configuration"
+        )
+    return {
+        "kind": "external",
+        "adapter": f"{type(provider).__module__}.{type(provider).__qualname__}",
+        "configuration": json.loads(encode(configuration)),
+    }
 
 
 def restore_provider(recipe):
@@ -86,12 +97,21 @@ def _execute_plan(database, runtime, run_id, provider, progress):
     plan = ResumePlan.model_validate(run.configuration.get("resume_plan"))
     if plan.version != "collection-resume-1" or plan.max_request_attempts != 3:
         raise ValueError("Unsupported frozen collection configuration; start a new run")
+    # Validate adapters before report invalidation, state writes, or collection I/O.
+    # Built-ins always execute the saved recipe, never the caller's implementation.
+    if provider is not None and provider_recipe(provider) != plan.provider:
+        raise ValueError("Changed provider identity or input configuration requires a new run")
     if run.status == OperationalStatus.SUCCEEDED:
         artifacts = ReportService(database, runtime.reports_dir).generate(run_id)
         return run_id, run.status, artifacts
     if runtime.market != run.market.market_id:
         raise ValueError("Resume market differs from original run")
-    provider = SharedProvider(provider if provider is not None else restore_provider(plan.provider))
+    if plan.provider["kind"] == "external":
+        if provider is None or not plan.provider.get("configuration"):
+            raise ValueError("Resume requires the original identified external adapter")
+    else:
+        provider = restore_provider(plan.provider)
+    provider = SharedProvider(provider)
     with database.write() as repo:
         repo.reset_unfinished_report(run_id)
         repo.set_run_status(run_id, OperationalStatus.RUNNING)
