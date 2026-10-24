@@ -517,3 +517,28 @@ uv run stock-analyser collect-fixture --research-scenario conflicting-event
 
 See [research evidence](docs/research-evidence.md) for retention fields, settings,
 earnings timezones, failure semantics, and offline report recovery.
+
+## Technology universe qualification (US-011)
+
+Run the bounded live coverage spike without a database:
+
+```sh
+uv run --locked stock-analyser qualify-universe \
+  --output /absolute/path/to/new-coverage-run --max-pages 40 --profile-limit 10
+```
+
+It follows Massive reference pagination and Yahoo Technology screener offsets,
+checks totals and duplicates, samples classification profiles, and saves aggregate
+findings with a versioned proposed eligibility/liquidity policy. Massive uses the
+existing key and shared provider allowance. Choose a new output directory per run.
+Measured results and estimated cold/warm request costs are separate.
+
+**Full-sector acceptance remains blocked.** The command saves findings and exits
+one when coverage is not qualified; complete vendor pagination alone cannot
+clear classification, history, identity or retention gaps. Buy remains unavailable.
+See the [policy, experiment and alternatives](docs/technology-universe.md) and
+[saved live findings](docs/technology-universe-findings.md). Offline checks:
+
+```sh
+uv run --locked pytest -q tests/test_universe_spike.py
+```
