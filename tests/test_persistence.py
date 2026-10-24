@@ -53,7 +53,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0007"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -2088,3 +2088,231 @@ def test_legacy_instrument_and_snapshot_repositories_remain_immutable_compatible
             repo.connection.scalar(sa.select(sa.func.count()).select_from(s.instrument_versions))
             == 1
         )
+
+
+def test_ledger_actions_demo_atomic_correction_and_immutable_receipts(database):
+    from stock_analyser.ledger import (
+        CorporateAction,
+        Correction,
+        execution_receipt,
+        ledger_history,
+        portfolio,
+        portfolio_revision,
+        record_execution,
+        record_ledger_event,
+    )
+
+    instrument = ledger_instrument(database)
+    original = ledger_trade(instrument)
+    bought = record_execution(database, original)
+    old_revision = portfolio_revision(database)
+    split = CorporateAction(
+        instrument_id=instrument.instrument_id,
+        kind="SPLIT",
+        ratio="2",
+        effective_at=datetime(2025, 1, 2, tzinfo=UTC),
+        reason="Synthetic 2:1 split",
+        idempotency_key="split-2025",
+    )
+    first = record_ledger_event(database, split)
+    assert record_ledger_event(database, split) == first
+    assert first.portfolio_revision != old_revision
+    assert first.position.quantity == 20 and first.position.cost_basis == 1000
+    assert first.position.cost_basis / first.position.quantity == 50
+    sale = ledger_trade(instrument, "SELL", "8", "60").model_copy(
+        update={"executed_at": datetime(2025, 1, 3, tzinfo=UTC)}
+    )
+    sold = record_execution(database, sale)
+    correction = Correction(
+        target_execution_id=bought.execution_id,
+        reason="Broker fill was 12 shares at 90",
+        replacement=original.model_copy(update={"quantity": Decimal("12"), "price": Decimal("90")}),
+        idempotency_key="correct-buy",
+    )
+    corrected = record_ledger_event(database, correction)
+    assert record_ledger_event(database, correction) == corrected
+    assert corrected.position.quantity == 16
+    assert corrected.position.cost_basis == 720
+    assert corrected.position.realized_pnl == 120
+    assert corrected.position.lots[0].execution_id == bought.execution_id
+    assert portfolio_revision(database) == corrected.portfolio_revision
+    revision = portfolio_revision(database)
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_ledger_event(
+            database,
+            Correction(
+                target_execution_id=bought.execution_id,
+                reason="Invalid reversal",
+                idempotency_key="invalid-reversal",
+            ),
+        )
+    assert portfolio_revision(database) == revision
+    assert execution_receipt(database, original.idempotency_key) == bought
+    assert execution_receipt(database, sale.idempotency_key) == sold
+    assert len(ledger_history(database)) == 4
+    # A second correction explicitly links to the prior correction and recomputes all lots.
+    reversed_sale = record_ledger_event(
+        database,
+        Correction(
+            target_execution_id=sold.execution_id,
+            reason="Trade busted",
+            idempotency_key="bust-sale",
+        ),
+    )
+    assert reversed_sale.position.quantity == 24
+    correction2 = correction.model_copy(update={"idempotency_key": "correct-buy-again"})
+    corrected2 = record_ledger_event(database, correction2)
+    assert corrected2.previous_correction_id == corrected.event_id
+    assert portfolio(database)[0].quantity == 24
+
+
+def test_ledger_complex_actions_conflicts_and_later_executions(database):
+    from stock_analyser.ledger import (
+        CorporateAction,
+        Correction,
+        portfolio,
+        record_execution,
+        record_ledger_event,
+    )
+
+    instrument = ledger_instrument(database)
+    purchase = record_execution(database, ledger_trade(instrument))
+    for kind in ("MERGER", "SPIN_OFF", "AMBIGUOUS"):
+        receipt = record_ledger_event(
+            database,
+            CorporateAction(
+                instrument_id=instrument.instrument_id,
+                kind=kind,
+                effective_at=datetime(2025, 1, 2, tzinfo=UTC),
+                reason="Needs operator reconciliation",
+                idempotency_key=kind,
+            ),
+        )
+        assert receipt.status == "RECONCILIATION_REQUIRED"
+    assert portfolio(database)[0].quantity == 10
+    assert len(portfolio(database)[0].reconciliation_required) == 3
+    correction = Correction(
+        target_execution_id=purchase.execution_id, reason="Busted", idempotency_key="reverse"
+    )
+    receipt = record_ledger_event(database, correction)
+    assert receipt.position.quantity == 0 and receipt.position.cost_basis == 0
+    with pytest.raises(ValueError, match="Idempotency"):
+        record_ledger_event(database, correction.model_copy(update={"reason": "Other"}))
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_execution(database, ledger_trade(instrument, "SELL", "1"))
+    assert portfolio(database)[0].quantity == 0
+    restored = record_ledger_event(
+        database,
+        Correction(
+            target_execution_id=purchase.execution_id,
+            replacement=purchase.confirmation,
+            reason="Restore original",
+            idempotency_key="restore",
+        ),
+    )
+    assert restored.previous_correction_id == receipt.event_id
+    assert restored.position.quantity == 10
+
+
+def test_ledger_event_cli_confirmation_and_history(database, monkeypatch, tmp_path):
+    from stock_analyser.ledger import CorporateAction, ledger_history, record_execution
+
+    instrument = ledger_instrument(database)
+    record_execution(database, ledger_trade(instrument))
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    action = CorporateAction(
+        instrument_id=instrument.instrument_id,
+        kind="SPLIT",
+        ratio="2",
+        effective_at=datetime(2025, 1, 2, tzinfo=UTC),
+        reason="Test",
+        idempotency_key="cli-split",
+    )
+    input_path = tmp_path / "action.json"
+    input_path.write_text(action.model_dump_json())
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["record-corporate-action", "--input", str(input_path)], input="n\n"
+    )
+    assert result.exit_code == 0 and len(ledger_history(database)) == 1
+    result = runner.invoke(
+        app, ["record-corporate-action", "--input", str(input_path)], input="y\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert len(ledger_history(database)) == 2
+    result = runner.invoke(app, ["ledger-history"])
+    assert result.exit_code == 0 and "cli-split" in result.output
+
+
+def test_ledger_events_leave_historical_reports_immutable(database, tmp_path, monkeypatch):
+    from stock_analyser.ledger import Correction, record_execution, record_ledger_event
+    from stock_analyser.reports import ReportService
+
+    output = collect_report(database, tmp_path, monkeypatch)
+    run_id = UUID(output["run_id"])
+    service = ReportService(database, tmp_path / "reports")
+    frozen = service.freeze(run_id)
+    files = {
+        Path(output[key]): Path(output[key]).read_bytes()
+        for key in ("report", "report_json", "manifest")
+    }
+    instrument = ledger_instrument(database)
+    receipt = record_execution(database, ledger_trade(instrument))
+    record_ledger_event(
+        database,
+        Correction(
+            target_execution_id=receipt.execution_id, reason="Busted", idempotency_key="bust"
+        ),
+    )
+    assert service.freeze(run_id) == frozen
+    assert all(path.read_bytes() == content for path, content in files.items())
+    Path(output["report_json"]).unlink()
+    service.generate(run_id)
+    assert all(path.read_bytes() == content for path, content in files.items())
+
+
+def test_ledger_invalid_backdated_split_and_corrected_sale_are_atomic(database):
+    from stock_analyser.ledger import (
+        CorporateAction,
+        Correction,
+        ledger_history,
+        portfolio_revision,
+        record_execution,
+        record_ledger_event,
+    )
+
+    instrument = ledger_instrument(database)
+    record_execution(database, ledger_trade(instrument))
+    sale = record_execution(
+        database,
+        ledger_trade(instrument, "SELL", "8").model_copy(
+            update={"executed_at": datetime(2025, 1, 3, tzinfo=UTC)}
+        ),
+    )
+    revision = portfolio_revision(database)
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_ledger_event(
+            database,
+            CorporateAction(
+                instrument_id=instrument.instrument_id,
+                kind="SPLIT",
+                ratio="0.5",
+                effective_at=datetime(2025, 1, 2, tzinfo=UTC),
+                reason="Reverse split",
+                idempotency_key="invalid-split",
+            ),
+        )
+    with pytest.raises(ValueError, match="Insufficient"):
+        record_ledger_event(
+            database,
+            Correction(
+                target_execution_id=sale.execution_id,
+                reason="Oversold",
+                replacement=sale.confirmation.model_copy(update={"quantity": Decimal("11")}),
+                idempotency_key="invalid-sale",
+            ),
+        )
+    assert portfolio_revision(database) == revision
+    assert len(ledger_history(database)) == 2

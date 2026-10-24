@@ -146,3 +146,34 @@ def test_nondefault_instrument_precision_is_serialized_and_changes_identity():
     assert payload["price_increment"] == "0.01"
     assert Instrument.model_validate(payload) == custom
     assert instrument_revision(custom) != instrument_revision(instrument)
+
+
+@pytest.mark.parametrize("ratio", [None, "0", "-1", 2.0, "Infinity"])
+def test_split_requires_valid_decimal_ratio(ratio):
+    from stock_analyser.ledger import CorporateAction
+
+    with pytest.raises(ValueError):
+        CorporateAction(
+            instrument_id=UUID_INSTRUMENT,
+            kind="SPLIT",
+            ratio=ratio,
+            effective_at=datetime(2025, 1, 1, tzinfo=UTC),
+            reason="Synthetic",
+            idempotency_key="split",
+        )
+
+
+def test_split_preserves_each_lot_basis_and_precedes_same_timestamp_sale():
+    from stock_analyser.ledger import CorporateAction
+
+    split = CorporateAction(
+        instrument_id=UUID_INSTRUMENT,
+        kind="SPLIT",
+        ratio="2",
+        effective_at=datetime(2025, 1, 1, tzinfo=UTC),
+        reason="Synthetic",
+        idempotency_key="split",
+    )
+    buy = trade().model_copy(update={"executed_at": datetime(2024, 12, 31, tzinfo=UTC)})
+    position = fifo([(uuid4(), buy), (uuid4(), trade("SELL", "15", "60"))], [(uuid4(), split)])
+    assert (position.quantity, position.cost_basis, position.realized_pnl) == (5, 250, 150)

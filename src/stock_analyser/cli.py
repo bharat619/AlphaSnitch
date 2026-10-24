@@ -732,11 +732,12 @@ def collect_prices(
 
 
 def show_portfolio(runtime):
-    from stock_analyser.ledger import portfolio
+    from stock_analyser.ledger import portfolio_state
 
     database = report_database(runtime)
     try:
-        positions = portfolio(database)
+        positions, revision = portfolio_state(database)
+        display(f"Portfolio revision: {revision}")
         if not positions:
             display("Portfolio is empty.")
         for position in positions:
@@ -810,6 +811,59 @@ def receipt_command(ctx: typer.Context, key: str):
     try:
         database = report_database(ctx.obj)
         display(execution_receipt(database, key).model_dump_json(indent=2))
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database:
+            database.close()
+
+
+@app.command("correct-execution")
+def correct_execution_command(ctx: typer.Context, input_path: Path = typer.Option(..., "--input")):
+    """Review and append a correction (replacement=null reverses the original execution)."""
+    from stock_analyser.ledger import Correction
+
+    try:
+        confirm_ledger_event(ctx.obj, Correction.model_validate_json(input_path.read_bytes()))
+    except Exception as exc:
+        fail(exc)
+
+
+@app.command("record-corporate-action")
+def corporate_action_command(ctx: typer.Context, input_path: Path = typer.Option(..., "--input")):
+    """Apply an explicit split or flag a complex action for reconciliation."""
+    from stock_analyser.ledger import CorporateAction
+
+    try:
+        confirm_ledger_event(ctx.obj, CorporateAction.model_validate_json(input_path.read_bytes()))
+    except Exception as exc:
+        fail(exc)
+
+
+def confirm_ledger_event(runtime, operation):
+    from stock_analyser.ledger import record_ledger_event
+
+    display(operation.model_dump_json(indent=2))
+    if not typer.confirm("Record this ledger event?", default=False):
+        display("Cancelled; no ledger write.")
+        return
+    database = report_database(runtime)
+    try:
+        display(record_ledger_event(database, operation).model_dump_json(indent=2))
+    finally:
+        database.close()
+
+
+@app.command("ledger-history")
+def ledger_history_command(ctx: typer.Context):
+    """Show immutable executions, corrections and corporate actions with receipts."""
+    from stock_analyser.ledger import ledger_history
+
+    database = None
+    try:
+        database = report_database(ctx.obj)
+        for receipt in ledger_history(database):
+            display(receipt.model_dump_json(indent=2))
     except Exception as exc:
         fail(exc)
     finally:
