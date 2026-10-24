@@ -35,6 +35,15 @@ automatic reuse across different builds; reopening a saved report remains offlin
 - Price reuse requires the same resolved periods and history requirement, plus
   an observation less than 24 hours old. A newer request time alone does not make
   already completed sessions invalid. Future-dated observations are not fresh.
+- Ordinary reuse and incremental merging consider only the newest verified
+  overlapping snapshot for the identity. A newer overlapping window supersedes
+  an older exact match even while its TTL remains valid, conservatively including
+  refreshes without detected corrections. If the newest window does not match,
+  reuse misses and refresh uses that window as its merge base. If its session
+  cutoff or request time is later than the requested history allows, refresh
+  fetches the full requested window instead of reviving older values. Disjoint
+  windows do not invalidate each other. Explicit replay may still select the
+  older exact snapshot; no saved evidence or report input is rewritten.
 - Missing sessions, expiry, or explicit `refresh` fetch missing history plus five
   overlapping periods by default. Weekly overlap consists of whole exchange weeks.
   Earlier requested history expands the contiguous query to include it. Disjoint
@@ -101,8 +110,8 @@ source files requires a future reference-aware retention workflow.
 ## Demonstration
 
 `tests/test_cache.py` covers restart replay, identity isolation, independent TTLs,
-incremental windows, precise corrections, missing-overlap rejection, corruption
-and interrupted publication. `tests/test_persistence.py -k cache` uses disposable
+incremental windows, precise corrections, superseded exact windows, missing-overlap
+rejection, corruption and interrupted publication. `tests/test_persistence.py -k cache` uses disposable
 PostgreSQL databases to replay with a provider that fails if called, inject a
 corrected bar, inspect both snapshots, and regenerate the original report with
 identical bytes and artifact hashes. No provider credentials or live requests are

@@ -471,7 +471,8 @@ uv run --locked stock-analyser collect-prices --cache-mode refresh
 uv run --locked stock-analyser collect-prices --cache-mode off
 ```
 
-`reuse` accepts matching session windows checked within 24 hours. Missing sessions
+`reuse` accepts matching session windows checked within 24 hours unless newer
+verified overlapping evidence supersedes them. Missing sessions
 or expiration trigger a refresh of missing history plus the last five overlapping
 periods (daily sessions or complete weeks). `refresh` always performs that refresh.
 `off` fetches the entire requested window without reading or publishing the cache.

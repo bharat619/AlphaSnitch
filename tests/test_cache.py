@@ -3,6 +3,7 @@
 import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -217,6 +218,97 @@ def test_same_window_refresh_and_missing_overlap_never_fill_holes(setup):
     _, findings, _ = validate_prices(response, resolution)
     assert "MISSING_SESSION" in {f.code for f in findings}
     assert cache.lookup(identity, resolution, "replay")[0] == reference
+
+
+@pytest.mark.parametrize("advance_days", [0, 1])
+@pytest.mark.parametrize("historical_request", [False, True])
+def test_newer_overlapping_correction_supersedes_fresh_exact_window(
+    setup, advance_days, historical_request
+):
+    cache, run, instrument, resolution, resolver, identity, now = setup
+    cache.policy = cache.policy.model_copy(update={"price_ttl_seconds": 2 * 86400})
+    original, original_packet = seed(setup)
+    original_bytes = Path(original.reference).read_bytes()
+    corrected_session = original_packet.bars[0].session  # Outside the normal tail overlap.
+    wider = resolver.resolve(
+        run.market,
+        instrument.venue,
+        resolution.requirement.model_copy(update={"minimum_bars": 7}),
+        resolution.requested_as_of + timedelta(days=advance_days, minutes=1),
+    )
+    now[0] = wider.requested_as_of + timedelta(seconds=2)
+    assert cache.lookup(identity, resolution, "reuse") == (original, original_packet)
+    calls = []
+
+    class Corrected(RawFixtureProvider):
+        def fetch(self, instrument, market, plan):
+            calls.append(plan)
+            response = super().fetch(instrument, market, plan)
+            payload = json.loads(response.payload)
+            for bar in payload["bars"]:
+                if bar["session"] == str(corrected_session):
+                    bar["close"] = "11.5"
+            return response.model_copy(update={"payload": encode(payload), "retrieved_at": now[0]})
+
+    # A full-overlap refresh observes a correction outside the default tail.
+    cache.policy = cache.policy.model_copy(update={"overlap_periods": 7})
+    response, sources, lineage = cache.fetch(identity, instrument, run.market, wider, Corrected())
+    corrected, _ = save(cache, identity, instrument, run.market, wider, response, sources, lineage)
+    assert lineage["corrected_sessions"] == [str(corrected_session)]
+    cache.policy = cache.policy.model_copy(update={"overlap_periods": 2})
+    now[0] += timedelta(seconds=2)
+    requested = (
+        resolution
+        if historical_request
+        else resolution.model_copy(update={"requested_as_of": now[0]})
+    )
+
+    # Restart to prove invalidation comes from durable evidence, not in-memory state.
+    cache = EvidenceCache(cache.directory, cache.policy, clock=lambda: now[0])
+    assert cache.lookup(identity, requested, "reuse") is None
+    assert cache.lookup(identity, requested, "replay") == (original, original_packet)
+    calls.clear()
+    response, sources, lineage = cache.fetch(
+        identity, instrument, run.market, requested, Corrected()
+    )
+    refreshed, packet = save(
+        cache, identity, instrument, run.market, requested, response, sources, lineage
+    )
+    assert packet.bars[0].close == original_packet.bars[0].close + Decimal("0.5")
+    assert not packet.findings
+    if advance_days or historical_request:
+        # A newer observation outside the requested cutoff cannot be a merge base;
+        # refresh the full requested window instead of reviving the stale parent.
+        assert calls[0].periods == requested.periods
+        assert lineage == {}
+    else:
+        assert len(calls[0].periods) == 2
+        assert lineage["parent_snapshot_id"] == str(corrected.metadata.snapshot_id)
+    assert cache.lookup(identity, requested, "reuse") == (refreshed, packet)
+    assert load_snapshot(original) == original_packet
+    assert Path(original.reference).read_bytes() == original_bytes
+
+
+def test_newer_disjoint_window_does_not_supersede_exact_match(setup):
+    cache, run, instrument, resolution, resolver, identity, now = setup
+    cache.policy = cache.policy.model_copy(update={"price_ttl_seconds": 2 * 86400})
+    original = seed(setup)
+    disjoint = resolver.resolve(
+        run.market,
+        instrument.venue,
+        resolution.requirement.model_copy(update={"minimum_bars": 1}),
+        resolution.requested_as_of + timedelta(days=1),
+    )
+    now[0] = disjoint.requested_as_of + timedelta(seconds=2)
+    save(
+        cache,
+        identity,
+        instrument,
+        run.market,
+        disjoint,
+        RawFixtureProvider().fetch(instrument, run.market, disjoint),
+    )
+    assert cache.lookup(identity, resolution, "reuse") == original
 
 
 @pytest.mark.parametrize("target", ["manifest", "source", "index"])

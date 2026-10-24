@@ -147,26 +147,35 @@ class EvidenceCache:
         )
         return value
 
-    def candidates(self, identity, resolution):
+    def candidates(self, identity, resolution, *, replay=False):
         entries = sorted(
             self._entries("prices", identity, CacheEntry),
             key=lambda e: (e.checked_at, e.committed_at, str(e.snapshot.metadata.snapshot_id)),
             reverse=True,
         )
+        requested_sessions = {p.session_end for p in resolution.periods}
         for entry in entries:
             try:
                 packet = load_snapshot(entry.snapshot)
-                if (
-                    reusable(packet)
-                    and packet.resolution.session_cutoff <= resolution.session_cutoff
-                    and packet.resolution.requested_as_of <= resolution.requested_as_of
-                ):
-                    yield entry, packet
             except (OSError, ValueError):
                 continue
+            if not reusable(packet):
+                continue
+            if not replay and not any(b.session in requested_sessions for b in packet.bars):
+                continue
+            if (
+                packet.resolution.session_cutoff <= resolution.session_cutoff
+                and packet.resolution.requested_as_of <= resolution.requested_as_of
+            ):
+                yield entry, packet
+            if not replay:
+                # The newest verified overlapping observation supersedes older
+                # windows for reuse AND incremental merging, even if it cannot
+                # satisfy this exact request. Only explicit replay may fall back.
+                return
 
     def lookup(self, identity, resolution, mode):
-        for entry, packet in self.candidates(identity, resolution):
+        for entry, packet in self.candidates(identity, resolution, replay=mode == "replay"):
             age = (self.clock() - entry.checked_at).total_seconds()
             if (
                 packet.resolution.periods == resolution.periods
