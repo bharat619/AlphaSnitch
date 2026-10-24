@@ -185,6 +185,22 @@ def test_missing_constituent_rejects_week_even_when_its_last_session_exists():
     assert len(json.loads(response.payload)["daily_source"]) == len(frame)
 
 
+def test_cache_refresh_honors_short_window_and_bypasses_in_memory_frame():
+    plans = (plan(), plan("weekly", 2))
+    ticker = TickerFixture(frame_for(plans))
+    provider = adapter(ticker, plans)
+    instrument = smoke_instrument("AAPL", "XNAS")
+    provider.fetch(instrument, US_MARKET, plans[0])
+    short = plan(n=1)
+    ticker.frame = frame_for((short,))
+    response = provider.fetch_window(instrument, US_MARKET, short)
+    assert len(ticker.calls) == 2
+    assert ticker.calls[-1]["start"] == short.history_start.isoformat()
+    assert len(json.loads(response.payload)["bars"]) == 1
+    provider.fetch_window(instrument, US_MARKET, short)
+    assert len(ticker.calls) == 3
+
+
 def test_insufficient_per_instrument_long_history_is_rejected():
     p = plan("weekly", 260)
     ticker = TickerFixture(frame_for((p,)).iloc[-10:])  # Recent listing, not five years.

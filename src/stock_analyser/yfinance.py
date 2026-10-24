@@ -33,6 +33,12 @@ class YFinancePriceProvider:
         self.resolutions = resolutions
         self._frames = {}
 
+    def fetch_window(self, instrument, market, resolution):
+        """A cache refresh must honor its bounded window and make a new request."""
+        return YFinancePriceProvider(ticker_factory=self.ticker_factory, clock=self.clock).fetch(
+            instrument, market, resolution
+        )
+
     def fetch(self, instrument, market, resolution):
         market.validate_instrument(instrument)
         if (

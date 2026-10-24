@@ -446,7 +446,8 @@ adapter supports `split` requests only. Details and upstream references are in
 
 Reports freeze the routing reason, verified coverage, requested/returned history,
 feed, adjustment, quality findings and source hashes. Each invocation creates
-fresh run and snapshot IDs, including after a source-policy change; reports can
+a fresh run; cached evidence retains its original snapshot ID. Refreshes and
+source-policy changes create new snapshots. Reports can
 be reopened or regenerated without refetching. Live publication timing remains
 unverified, so complete live histories still produce `PARTIAL` readiness and no
 strategy verdict. As with `collect-massive`, the command exits zero only when all
@@ -456,4 +457,42 @@ The credential-free capability and insufficient-history demonstration is:
 
 ```sh
 uv run --locked pytest -q tests/test_price_routing.py
+```
+
+## Versioned evidence cache (US-009)
+
+`collect-prices` and `collect-massive` use verified cached snapshots by default.
+Choose a mode explicitly when replaying or checking for provider corrections:
+
+```sh
+uv run --locked stock-analyser collect-prices --cache-mode reuse
+uv run --locked stock-analyser collect-prices --cache-mode replay
+uv run --locked stock-analyser collect-prices --cache-mode refresh
+uv run --locked stock-analyser collect-prices --cache-mode off
+```
+
+`reuse` accepts matching session windows checked within 24 hours. Missing sessions
+or expiration trigger a refresh of missing history plus the last five overlapping
+periods (daily sessions or complete weeks). `refresh` always performs that refresh.
+`off` fetches the entire requested window without reading or publishing the cache.
+`replay` ignores age, requires an exact verified window, and never constructs a
+provider or loads credentials; a miss fails without a network fallback. It still
+uses the local PostgreSQL database. Historical reports remain accessible through
+`report show` and `report regenerate`, even after the current session window changes.
+
+Metadata has its own 24-hour expiration and immutable revisions. Today's smoke
+listing metadata comes from explicit local definitions, not live discovery.
+Price snapshots and report inputs never expire or get rewritten. Publication
+uncertainty remains visible when evidence is reused; a cache hit cannot turn
+`PARTIAL` evidence into `AVAILABLE` evidence.
+
+See [cache design and retention policy](docs/evidence-cache.md) for identity,
+atomic publication, correction lineage, and refresh limits. The credential-free
+demonstration injects a corrected bar and verifies both generations plus unchanged
+original report hashes:
+
+```sh
+uv run --locked pytest -q tests/test_cache.py
+# Requires STOCK_ANALYSER_TEST_DATABASE_URL, as described above:
+uv run --locked pytest -q tests/test_persistence.py -k cache
 ```

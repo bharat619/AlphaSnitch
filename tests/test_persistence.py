@@ -640,6 +640,98 @@ def collect_report(database, tmp_path, monkeypatch, scenario="valid"):
     return json.loads(result.stdout)
 
 
+def test_cache_replay_correction_and_unchanged_report_inputs(database, tmp_path, monkeypatch):
+    from stock_analyser.cache import CachePolicy, EvidenceCache, load_snapshot
+    from stock_analyser.collection import CollectionService, encode
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.reports import ReportService
+
+    output = collect_report(database, tmp_path, monkeypatch)
+    original_id = UUID(output["run_id"])
+    reports = ReportService(database, tmp_path / "reports")
+    reports.generate(original_id)
+    frozen = reports.freeze(original_id)
+    with database.read() as repo:
+        original = repo.get_run(original_id)
+        instrument = repo.get_instrument(original.request.instrument_ids[0])
+        old_reference = repo.list_snapshots(original_id)[0]
+        artifacts = repo.list_artifacts(original_id)
+    saved_files = {a.reference: Path(a.reference).read_bytes() for a in artifacts}
+    packet = load_snapshot(old_reference)
+    cache = EvidenceCache(tmp_path / "cache", CachePolicy(overlap_periods=1))
+    identity = cache.identity(
+        original, instrument, packet.resolution, original.market.route("prices")
+    )
+    cache.commit(identity, old_reference, packet)
+
+    def new_run():
+        run = RunRecord(
+            run_id=uuid4(),
+            request=original.request,
+            market=original.market,
+            configuration=original.configuration,
+            source_version=original.source_version,
+            component_versions=original.component_versions,
+            history_resolutions=original.history_resolutions,
+        )
+        with database.write() as repo:
+            repo.create_run(run)
+        return run.run_id
+
+    class Offline:
+        def fetch(self, *args):
+            pytest.fail("Offline replay attempted a provider request")
+
+    replay_id = new_run()
+    service = CollectionService(database, tmp_path / "snapshots", cache=cache)
+    assert service.collect(replay_id, instrument, Offline(), cache_mode="replay") == (packet,)
+    with database.read() as repo:
+        assert repo.list_snapshots(replay_id) == (old_reference,)
+        assert repo.get_run(replay_id).status == OperationalStatus.SUCCEEDED
+
+    class Corrected(RawFixtureProvider):
+        def fetch(self, *args):
+            response = super().fetch(*args)
+            payload = json.loads(response.payload)
+            payload["bars"][-1]["close"] = "11.5"
+            return response.model_copy(update={"payload": encode(payload)})
+
+    refresh_id = new_run()
+    corrected = service.collect(refresh_id, instrument, Corrected(), cache_mode="refresh")[0]
+    assert corrected.metadata.snapshot_id != packet.metadata.snapshot_id
+    assert corrected.cache_refresh["corrected_sessions"] == [str(packet.bars[-1].session)]
+    assert corrected.bars[-1].close != packet.bars[-1].close
+    reports.generate(refresh_id)
+    assert "corrected sessions:" in reports.show(refresh_id)
+    assert reports.freeze(original_id) == frozen
+    reports.generate(original_id)
+    assert {p: Path(p).read_bytes() for p in saved_files} == saved_files
+    assert load_snapshot(old_reference) == packet
+    with database.read() as repo:
+        assert repo.list_snapshots(original_id) == (old_reference,)
+        assert repo.list_artifacts(original_id) == artifacts
+
+
+def test_cache_replay_miss_fails_without_provider(database, tmp_path, monkeypatch):
+    from stock_analyser.cache import CacheMiss, EvidenceCache
+    from stock_analyser.collection import CollectionService
+
+    output = collect_report(database, tmp_path, monkeypatch)
+    with database.read() as repo:
+        original = repo.get_run(UUID(output["run_id"]))
+        instrument = repo.get_instrument(original.request.instrument_ids[0])
+    run = original.model_copy(update={"run_id": uuid4(), "status": OperationalStatus.NOT_RUN})
+    with database.write() as repo:
+        repo.create_run(run)
+    with pytest.raises(CacheMiss, match="replay never calls a provider"):
+        CollectionService(
+            database, tmp_path / "snapshots", cache=EvidenceCache(tmp_path / "empty-cache")
+        ).collect(run.run_id, instrument, None, cache_mode="replay")
+    with database.read() as repo:
+        assert repo.get_run(run.run_id).status == OperationalStatus.FAILED
+        assert not repo.list_snapshots(run.run_id)
+
+
 @pytest.mark.parametrize(
     "scenario,status,availability",
     [
@@ -948,7 +1040,9 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
         monkeypatch.setattr(
             live,
             "collect_smoke",
-            lambda *args: collect_smoke(*args, requested=datetime(2026, 10, 17, tzinfo=UTC)),
+            lambda *args, **kwargs: collect_smoke(
+                *args, requested=datetime(2026, 10, 17, tzinfo=UTC), **kwargs
+            ),
         )
         monkeypatch.setenv("MASSIVE_API_KEY", "private-live-key")
         monkeypatch.setenv(
@@ -957,6 +1051,17 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
         command = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-massive"])
         assert command.exit_code == (0 if scenario == "complete" else 1), command.output
         results = json.loads(command.stdout)["reports"]
+        if scenario == "complete":
+            before = list(calls)
+            monkeypatch.setattr(
+                "stock_analyser.config.load_massive_key",
+                lambda: pytest.fail("Replay loaded provider credentials"),
+            )
+            replayed = CliRunner().invoke(
+                app, ["--data-dir", str(tmp_path), "collect-massive", "--cache-mode", "replay"]
+            )
+            assert replayed.exit_code == 0, replayed.output
+            assert calls == before
     if scenario == "long-cooldown":
         assert len(calls) == 1
         assert float((tmp_path / "provider.lock").read_text()) == now[0] + 300
@@ -1145,8 +1250,29 @@ def test_routed_prices_freeze_one_source_and_reopen_reports(
                 for r in results
                 for s in repo.list_snapshots(UUID(r["run_id"]))
             }
+        replayed = live.collect_smoke(
+            database,
+            runtime,
+            requested=requested,
+            routed=True,
+            weekly_bars=260,
+            cache_mode="replay",
+        )
+        assert calls == ["AAPL", "SPY"]
+        assert all(r["history_complete"] for r in replayed)
+        with database.read() as repo:
+            assert {
+                s.metadata.snapshot_id
+                for r in replayed
+                for s in repo.list_snapshots(UUID(r["run_id"]))
+            } == original
         again = live.collect_smoke(
-            database, runtime, requested=requested, routed=True, weekly_bars=260
+            database,
+            runtime,
+            requested=requested,
+            routed=True,
+            weekly_bars=260,
+            cache_mode="off",
         )
         with database.read() as repo:
             new = {

@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 from rich.prompt import Prompt
 
+from stock_analyser.cache import CacheMode
 from stock_analyser.config import ConfigurationError, Runtime, load_runtime
 from stock_analyser.persistence import Database
 from stock_analyser.security import configure_logging, redact, redact_values, safe_error
@@ -357,8 +358,13 @@ def report_regenerate(ctx: typer.Context, run_id: UUID) -> None:
 
 
 @app.command("collect-massive")
-def collect_massive(ctx: typer.Context) -> None:
+def collect_massive(
+    ctx: typer.Context,
+    cache_mode: CacheMode = typer.Option(CacheMode.REUSE),
+) -> None:
     """Opt in to bounded live AAPL/SPY daily/weekly collection and saved reports."""
+    from contextlib import ExitStack
+
     from platformdirs import user_data_path
 
     from stock_analyser.config import load_massive_key
@@ -368,13 +374,19 @@ def collect_massive(ctx: typer.Context) -> None:
     database = None
     try:
         runtime = ctx.obj
-        key = load_massive_key()
         # Fixed per-user path: changing --data-dir cannot bypass the process lease.
         lock_path = user_data_path("stock-analyser", appauthor=False) / "massive.lock"
-        with live_client(key, runtime.massive, lock_path) as client:
+        with ExitStack() as stack:
+            client = (
+                None
+                if cache_mode == CacheMode.REPLAY
+                else stack.enter_context(
+                    live_client(load_massive_key(), runtime.massive, lock_path)
+                )
+            )
             database = report_database(runtime)
             database.initialize()
-            results = collect_smoke(database, runtime, client)
+            results = collect_smoke(database, runtime, client, cache_mode=cache_mode)
         display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
         if any(not r["history_complete"] or r["collection_stopped"] for r in results):
             raise typer.Exit(1)
@@ -392,6 +404,10 @@ def collect_prices(
     ctx: typer.Context,
     daily_bars: int = typer.Option(3, min=1, max=10000),
     weekly_bars: int = typer.Option(260, min=1, max=1000),
+    cache_mode: CacheMode = typer.Option(
+        CacheMode.REUSE,
+        help="Reuse fresh evidence, refresh overlap, replay offline, or bypass cache.",
+    ),
 ) -> None:
     """Collect AAPL/SPY using one capable approved source for mandatory history."""
     from contextlib import ExitStack
@@ -420,6 +436,7 @@ def collect_prices(
                 daily_bars=daily_bars,
                 weekly_bars=weekly_bars,
                 massive_client_factory=massive_client,
+                cache_mode=cache_mode,
             )
         display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
         if any(not r["history_complete"] or r["collection_stopped"] for r in results):

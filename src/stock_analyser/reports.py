@@ -183,6 +183,14 @@ def render_markdown(data: ReportInput) -> bytes:
                 f"reference {source.reference}"
             )
     for packet in data.packets:
+        if packet.cache_refresh:
+            lines.append(
+                f"- Refresh of snapshot {packet.cache_refresh['parent_snapshot_id']}; "
+                f"corrected sessions: "
+                f"{', '.join(packet.cache_refresh['corrected_sessions']) or 'none'}; "
+                f"queried {packet.cache_refresh['refresh_start']} to "
+                f"{packet.cache_refresh['refresh_end']}"
+            )
         for finding in packet.findings:
             lines.append(
                 f"- {packet.metadata.snapshot_id}: {finding.severity} {finding.code}; "
