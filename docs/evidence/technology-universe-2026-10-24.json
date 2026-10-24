@@ -1,0 +1,463 @@
+{
+  "schema_version": "1",
+  "policy": {
+    "version": "us-technology-proposed-1",
+    "status": "evaluation_hypothesis",
+    "market": "US",
+    "sector": "technology",
+    "taxonomy": {
+      "source": "Yahoo sector",
+      "Technology": "technology"
+    },
+    "taxonomy_version": "yahoo-sector-map-1",
+    "other_known_sectors": [
+      "Basic Materials",
+      "Communication Services",
+      "Consumer Cyclical",
+      "Consumer Defensive",
+      "Energy",
+      "Financial Services",
+      "Healthcare",
+      "Industrials",
+      "Real Estate",
+      "Utilities"
+    ],
+    "eligible_type": "CS",
+    "venues": [
+      "XNAS",
+      "XNYS",
+      "ARCX",
+      "XASE",
+      "BATS"
+    ],
+    "currency": "USD",
+    "security_key": "share_class_figi; missing or conflicting identity blocks eligibility",
+    "listing_order": [
+      "XNAS",
+      "XNYS",
+      "ARCX",
+      "XASE",
+      "BATS"
+    ],
+    "listing_tie_breaker": "composite_figi, then provider ticker, ascending",
+    "minimum_price_usd": "5",
+    "minimum_average_traded_value_usd": "10000000",
+    "traded_value_sessions": 60,
+    "traded_value": "mean(unadjusted regular-session close * unadjusted share volume)",
+    "minimum_completed_daily_bars": 260,
+    "mandatory_history": "max(260, daily minimum+warmup); each mandatory weekly window separately",
+    "rank": "average traded value descending, immutable instrument UUID ascending",
+    "selection_count": 10,
+    "metadata_ttl_hours": 24,
+    "full_sector_accepted": false
+  },
+  "policy_sha256": "5a50f9173985edb5dabd1c05392f65dde45a3b9c62b64663c1bdf53df85d3141",
+  "started_at": "2026-10-24T07:30:03.906855+00:00",
+  "finished_at": "2026-10-24T07:33:00.947058+00:00",
+  "bounds": {
+    "max_pages_per_source": 40,
+    "profile_limit": 10,
+    "massive": {
+      "requests_per_minute": 5,
+      "timeout_seconds": 20.0,
+      "retries": 2,
+      "max_requests": 100,
+      "max_retry_delay_seconds": 120.0,
+      "page_size": 50000,
+      "news_page_size": 100,
+      "news_max_pages": 3,
+      "news_lookback_days": 7
+    }
+  },
+  "versions": {
+    "yfinance": "0.2.66",
+    "source": {
+      "package_version": "0.1.0",
+      "commit": "b2a92f00eecb82ef3cbc0921f5fddf53a65860f7",
+      "dirty": true
+    },
+    "implementation_sha256": "b1a28fd1b5411ce2d2d9b380a3fd01a0321eee44236f829a684c9aeb7e593ab8"
+  },
+  "measured": {
+    "reference": {
+      "source": "massive",
+      "query": {
+        "market": "stocks",
+        "locale": "us",
+        "active": "true",
+        "limit": 1000,
+        "sort": "ticker",
+        "order": "asc"
+      },
+      "status": "COMPLETE",
+      "reason": "TERMINAL_PAGE",
+      "reported_total": null,
+      "unique_rows": 13260,
+      "pages": [
+        {
+          "rows": 1000,
+          "sha256": "3a31e7e9d5ecc563bb44e95cd79559ad38a7b8653fd9aca4dfdead42e13cb51a",
+          "retrieved_at": "2026-10-24T07:30:17.517949+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "97725331a6b48e4f1830b5763d32d832227b7b782279ecae29424023239e4686",
+          "retrieved_at": "2026-10-24T07:30:29.585543+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "33161d8e7480915762d63dc442b0ab0147ca8e4b6fa958e56005416d28482f81",
+          "retrieved_at": "2026-10-24T07:30:41.553156+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "d8e41462b5633e6e1f7394e9051ca1a721364ac9e5f59359e2ee6861dbacbdeb",
+          "retrieved_at": "2026-10-24T07:30:53.591576+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "50fa1e8989ba255bad76bde0f53c9c7b1716d5fe201d065902b5d344a5d07d70",
+          "retrieved_at": "2026-10-24T07:31:05.488076+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "4010946e3c1fd95b47c6df1c0012200128abdb8ba4d59ae1d74f0ba9079e306a",
+          "retrieved_at": "2026-10-24T07:31:19.020516+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "14d32e807a6819d6fc22544dbf8a76b404720878a982aa3e60dd0e8cff579513",
+          "retrieved_at": "2026-10-24T07:31:29.563833+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "132d859f6c6263fe95c5b7753f716b4dbcd62f53067a4b2e3100a99d2bcd1fb6",
+          "retrieved_at": "2026-10-24T07:31:41.635063+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "6dddad116a6c596bb1761f4ff7d843af74c2bdd9378704e45beb619b0dee0a96",
+          "retrieved_at": "2026-10-24T07:31:53.495616+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "27532708abcb39a88b4d3e3d0552d873a154b067ae01e3b0c3176666652e6edb",
+          "retrieved_at": "2026-10-24T07:32:05.506849+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "0da682e6286c566edb7202f3e43701df1e10ae84eb4e7ce81a494a6a9972aba4",
+          "retrieved_at": "2026-10-24T07:32:17.529805+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "ea68dfdc5e48ee5a9c0b5868e7d1ab6fd517ce5869ebce9e1cec6fd0822cb0f2",
+          "retrieved_at": "2026-10-24T07:32:29.548123+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 1000,
+          "sha256": "9c299b0271ffd9f51d79d116394ccbbaffdfae13830c8c83c08fc1c227fd0c73",
+          "retrieved_at": "2026-10-24T07:32:41.547397+00:00",
+          "has_next": true
+        },
+        {
+          "rows": 260,
+          "sha256": "24efc011cac9c9bf82f711e65c135c8a90b14062de1f81e5129645ad8ad2be46",
+          "retrieved_at": "2026-10-24T07:32:53.119070+00:00",
+          "has_next": false
+        }
+      ],
+      "sdk_calls_attempted": null,
+      "metadata_sha256": "02e6781cf129bbef52843b746c146bb03dd66a086ba7c2c0d7c38e4641482683",
+      "scope": "provider query at retrieval time; not full-sector coverage"
+    },
+    "discovery": {
+      "source": "yfinance",
+      "query": {
+        "region": "us",
+        "sector": "Technology",
+        "size": 250,
+        "sortField": "ticker",
+        "sortAsc": true
+      },
+      "status": "COMPLETE",
+      "reason": "TOTAL_RECONCILED",
+      "reported_total": 2102,
+      "unique_rows": 2102,
+      "pages": [
+        {
+          "offset": 0,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "ffd2a5872ec7fa575f9bda558f63105bd18fbefe0a94658aa5a203bc24fa45b2",
+          "retrieved_at": "2026-10-24T07:32:53.738512+00:00"
+        },
+        {
+          "offset": 250,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "b7cb0fe30b60e35d31bbab8ee91375f54cbf37f64a418bdf6196aebf976e4891",
+          "retrieved_at": "2026-10-24T07:32:54.338789+00:00"
+        },
+        {
+          "offset": 500,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "81e2d53f1b84640652682bb7ed7cc56b99efb910e77020fab8d371b5b5541e3b",
+          "retrieved_at": "2026-10-24T07:32:54.772498+00:00"
+        },
+        {
+          "offset": 750,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "6e960511c5dd9cd58495bb53eb4c44e40924592c9e7d3e0ff27488283a86f962",
+          "retrieved_at": "2026-10-24T07:32:55.131028+00:00"
+        },
+        {
+          "offset": 1000,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "d2ee168978bb43805a41c0d2dbdd54514aa70b057faa0429e6d7ca211f02d050",
+          "retrieved_at": "2026-10-24T07:32:55.601328+00:00"
+        },
+        {
+          "offset": 1250,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "0ba89947ea8db178eb212c0488e84cb50024d4501b4b51d3a0b1c31fa9ec0603",
+          "retrieved_at": "2026-10-24T07:32:56.131632+00:00"
+        },
+        {
+          "offset": 1500,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "9bf7edfbbe622ed72cbda23091ca327836ab589fa58c3e7e28ab949524e311f0",
+          "retrieved_at": "2026-10-24T07:32:56.625896+00:00"
+        },
+        {
+          "offset": 1750,
+          "rows": 250,
+          "total": 2102,
+          "sha256": "d1e2db2607f2c3bf72f6fb911a785326f3cd1598e97bcfa4a726704195393a00",
+          "retrieved_at": "2026-10-24T07:32:57.158422+00:00"
+        },
+        {
+          "offset": 2000,
+          "rows": 102,
+          "total": 2102,
+          "sha256": "323660c65bb294085a48137bcf0c95600cec57b724de585f9c69a33ffbb1631f",
+          "retrieved_at": "2026-10-24T07:32:57.420394+00:00"
+        }
+      ],
+      "sdk_calls_attempted": 9,
+      "metadata_sha256": "5a64c9f229fe61a745451976531c4904bd9f8d9329554886cc942a8017aedda6",
+      "scope": "provider query at retrieval time; not full-sector coverage"
+    },
+    "profiles": {
+      "attempted": 10,
+      "classified_technology": 10,
+      "other_sector": 0,
+      "unknown_or_failed": 0,
+      "scope": "alphabetical bounded sample, not coverage proof",
+      "observations": [
+        {
+          "sha256": "2d5815f6e1afb58d63465082943b28d6560a80635f9454e1b28d6d5e86cd4601",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:57.771106+00:00"
+        },
+        {
+          "sha256": "952bfd09917e8b9ea2faebef1913a4e2f69a6f1a5f87e1dfc6f42817362f2d03",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:58.008228+00:00"
+        },
+        {
+          "sha256": "e2ba0030acda5d0a2a744b6d798aa28776615b18b088132da522c54067c75cd3",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:58.412887+00:00"
+        },
+        {
+          "sha256": "ae0e4bcaa2cb2061a3879696e32acc959bb2fd73fe9ec495214b335fc096a4b7",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:58.946492+00:00"
+        },
+        {
+          "sha256": "1a2bdaa307f622feb0110c3f14efd9baf243b8ce1e0dd94b08562057cf6c6b56",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:59.266071+00:00"
+        },
+        {
+          "sha256": "9a9952e2b63ad0e2d37845cd6cbae444808fa74cee05074a77e2a89534f0d644",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:59.593248+00:00"
+        },
+        {
+          "sha256": "960a9f447993b6c529e093ab416489d24943f9105fe28a51942980ea777b5b49",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:32:59.967015+00:00"
+        },
+        {
+          "sha256": "00b3f51c23d1b60fd245b4e786ee004fe0d86355d5fff8d3b0f72850dca679ca",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:33:00.326778+00:00"
+        },
+        {
+          "sha256": "040c8cbd2f167b1fea9b8f1426b10f1c9761aeb5ec4e7dcf47728a0aa943b503",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:33:00.583751+00:00"
+        },
+        {
+          "sha256": "1e310bac1913e1b2180eeb3f167354ef463f4c7351c56a9c2e9e9aec9d27085b",
+          "classification": "classified_technology",
+          "retrieved_at": "2026-10-24T07:33:00.858476+00:00"
+        }
+      ]
+    },
+    "reconciliation": {
+      "reference_exclusions": {
+        "NON_COMMON_OR_UNKNOWN_TYPE": 7935,
+        "UNKNOWN_LISTING_IDENTITY": 2403,
+        "UNKNOWN_SECURITY_IDENTITY": 2566,
+        "UNSUPPORTED_OR_UNKNOWN_VENUE": 22
+      },
+      "exclusion_counts_overlap": true,
+      "eligible_listings_before_dedup": 4168,
+      "distinct_candidate_securities": 4168,
+      "duplicate_listings_removed": 0,
+      "discovery_exact_symbol_matches": 846,
+      "discovery_unmatched_symbols": 1256,
+      "discovery_eligible_security_matches": 594,
+      "eligible_securities_outside_discovery": 3574,
+      "classification_completeness": "UNVERIFIED; absence from discovery is not non-Technology",
+      "symbol_mapping": "Exact only; punctuation, rename and venue differences need verification"
+    },
+    "elapsed_seconds": 177.155,
+    "massive_http_responses": [
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:30:17.506938+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:30:29.575318+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:30:41.545449+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:30:53.581190+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:31:05.477550+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:31:19.008956+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:31:29.552568+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:31:41.626057+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:31:53.484010+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:32:05.497172+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:32:17.522391+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:32:29.535613+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:32:41.539180+00:00",
+        "attempt": 1
+      },
+      {
+        "http_status": 200,
+        "retrieved_at": "2026-10-24T07:32:53.116598+00:00",
+        "attempt": 1
+      }
+    ],
+    "yahoo_http_requests": null,
+    "price_history_requests": 0
+  },
+  "estimated_workload": {
+    "kind": "estimate_only",
+    "unit": "logical provider calls; SDK HTTP amplification unknown",
+    "inputs": {
+      "reference_pages": 14,
+      "discovery_pages": 9,
+      "candidate_securities": 4168,
+      "sector_candidates": 2102,
+      "selected": 10,
+      "benchmark": 1,
+      "profile_calls_per_candidate": 1,
+      "price_pages_per_candidate": 1,
+      "action_pages_per_selected_and_benchmark": 2,
+      "news_pages_per_selected": 1
+    },
+    "cold_start": 6326,
+    "warm_next_session_metadata_fresh": 2135,
+    "warm_after_metadata_ttl": 6326,
+    "warm_exact_snapshot_replay": 0,
+    "cold_upper_scenario_two_retries_and_three_pages": 56934,
+    "assumptions": [
+      "All candidate securities need classification, not only discovery matches",
+      "Every sector candidate refreshes for ranking, not only the selected ten",
+      "260 daily bars plus independently resolved mandatory weekly warmup",
+      "One daily union-history call; valid only if chosen source covers the window",
+      "Actions/news estimate assumes ten selections; zero forward-earnings coverage",
+      "No failed calls, retries, paging, or SDK authentication in base estimates",
+      "Metadata TTL 24h; warm price refresh includes five overlapping sessions"
+    ]
+  },
+  "estimate_input_status": "observed counts; lower bounds when enumeration failed/truncated",
+  "gate": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "CLASSIFICATION_COMPLETENESS_UNVERIFIED",
+      "CROSS_SOURCE_IDENTITY_MAPPING_UNVERIFIED",
+      "HISTORY_AND_LIQUIDITY_NOT_MEASURED",
+      "RETENTION_RIGHTS_UNVERIFIED"
+    ]
+  },
+  "retention": "Aggregate counts and allowlisted metadata hashes; no raw rows or cursors"
+}
