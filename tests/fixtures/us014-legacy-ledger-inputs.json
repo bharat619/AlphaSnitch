@@ -1,0 +1,221 @@
+{
+  "source_commit": "68cd8b6326f76d74eca50060f5732e0b0968208e",
+  "instrument": {
+    "schema_version": "1",
+    "instrument_id": "00000000-0000-0000-0000-00000000000e",
+    "security_id": "00000000-0000-0000-0000-000000000003",
+    "market_id": "US",
+    "venue": "OTC",
+    "symbol": "LEGACY",
+    "series": "common",
+    "quote_currency": "USD",
+    "provider_symbols": []
+  },
+  "instrument_revision": "73572fe521a9a7634d6259cfe8b5e8148c31ad861f355b9758fd21a724b3d745",
+  "snapshot": {
+    "schema_version": "1",
+    "snapshot_id": "5dfe0b67-f409-547e-a522-ba368ba0371d",
+    "inputs_sha256": "9afd49178be44bf08e52e9ac8b41d8dd0473ede673af36855723d50858ef9167",
+    "request": {
+      "schema_version": "1",
+      "market": {
+        "schema_version": "1",
+        "market_id": "US",
+        "configuration_version": "synthetic-1",
+        "currency": "USD",
+        "timezone": "America/New_York",
+        "calendars": [
+          {
+            "schema_version": "1",
+            "venue": "XNAS",
+            "reference": "fixture-us",
+            "version": "synthetic-1"
+          }
+        ],
+        "routes": [
+          {
+            "schema_version": "1",
+            "role": "prices",
+            "provider": "fixture-us",
+            "feed": {
+              "schema_version": "1",
+              "feed_id": "fixture-us",
+              "kind": "synthetic",
+              "venues": [
+                "XNAS"
+              ]
+            }
+          },
+          {
+            "schema_version": "1",
+            "role": "universe",
+            "provider": "fixture-us",
+            "feed": {
+              "schema_version": "1",
+              "feed_id": "fixture-us",
+              "kind": "synthetic",
+              "venues": [
+                "XNAS"
+              ]
+            }
+          },
+          {
+            "schema_version": "1",
+            "role": "research",
+            "provider": "fixture-us",
+            "feed": {
+              "schema_version": "1",
+              "feed_id": "fixture-us",
+              "kind": "synthetic",
+              "venues": [
+                "XNAS"
+              ]
+            }
+          },
+          {
+            "schema_version": "1",
+            "role": "corporate_actions",
+            "provider": "fixture-us",
+            "feed": {
+              "schema_version": "1",
+              "feed_id": "fixture-us",
+              "kind": "synthetic",
+              "venues": [
+                "XNAS"
+              ]
+            }
+          }
+        ],
+        "capabilities": [
+          {
+            "schema_version": "1",
+            "provider": "fixture-us",
+            "daily_prices": true,
+            "weekly_prices": false,
+            "corporate_actions": true,
+            "news": true,
+            "universe": true,
+            "point_in_time_universe": false,
+            "max_history_days": null
+          }
+        ],
+        "benchmarks": [
+          {
+            "schema_version": "1",
+            "key": "broad_market",
+            "symbol": "INDEX",
+            "venue": "XNAS",
+            "currency": "USD"
+          }
+        ],
+        "strategy_profile": "synthetic-1"
+      },
+      "requested_as_of": "2026-10-16T00:00:00Z",
+      "population": {
+        "schema_version": "1",
+        "source": {
+          "schema_version": "1",
+          "provider": "fixture-us",
+          "provider_symbol": "US",
+          "retrieved_at": "2026-10-16T00:00:00Z",
+          "reference": "legacy-reference.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "session_start": null,
+          "session_end": null
+        },
+        "scope": "legacy compatibility fixture",
+        "enumeration_status": "COMPLETE",
+        "enumeration_reason": "COMPLETE",
+        "reference_pages": 1,
+        "candidates": [
+          {
+            "schema_version": "1",
+            "reference": {
+              "schema_version": "1",
+              "ticker": "LEGACY",
+              "active": null,
+              "market": null,
+              "locale": null,
+              "type": null,
+              "primary_exchange": "OTC",
+              "currency_name": null,
+              "share_class_figi": null,
+              "composite_figi": null,
+              "last_updated_utc": null
+            },
+            "instrument": {
+              "schema_version": "1",
+              "instrument_id": "00000000-0000-0000-0000-00000000000e",
+              "security_id": "00000000-0000-0000-0000-000000000003",
+              "market_id": "US",
+              "venue": "OTC",
+              "symbol": "LEGACY",
+              "series": "common",
+              "quote_currency": "USD",
+              "provider_symbols": []
+            },
+            "classification": null,
+            "identity_verified": true
+          }
+        ],
+        "full_sector_accepted": false
+      },
+      "policy": {
+        "schema_version": "1",
+        "version": "us-technology-selection-1",
+        "proposal_version": "us-technology-proposed-1",
+        "thresholds": "evaluation_hypotheses",
+        "taxonomy_mapping": "yahoo-sector-map-1",
+        "minimum_price_usd": "5",
+        "minimum_average_traded_value_usd": "10000000",
+        "traded_value_sessions": 60,
+        "minimum_daily_bars": 260,
+        "selection_count": 10,
+        "mandatory_history": []
+      },
+      "cutoff_policy": {
+        "schema_version": "1",
+        "policy_version": "completed-sessions-1",
+        "daily_grace_seconds": 900,
+        "weekly_grace_seconds": 900,
+        "publication_timing": "unverified",
+        "earliest_session": "1990-01-01"
+      },
+      "histories": []
+    },
+    "resolutions": [],
+    "result": {
+      "schema_version": "1",
+      "selected": [],
+      "ranked_instrument_ids": [],
+      "decisions": [
+        {
+          "schema_version": "1",
+          "ticker": "LEGACY",
+          "instrument_id": "00000000-0000-0000-0000-00000000000e",
+          "security_id": "00000000-0000-0000-0000-000000000003",
+          "reasons": [
+            "INACTIVE_OR_UNKNOWN",
+            "NON_COMMON_OR_UNKNOWN_TYPE",
+            "NON_USD_OR_UNKNOWN_CURRENCY",
+            "NOT_US_STOCK",
+            "UNKNOWN_LISTING_IDENTITY",
+            "UNKNOWN_SECURITY_IDENTITY",
+            "UNSUPPORTED_MARKET_OR_CALENDAR",
+            "UNSUPPORTED_OR_UNKNOWN_VENUE"
+          ],
+          "average_traded_value": null,
+          "latest_price": null,
+          "observations": [],
+          "history_snapshot_ids": []
+        }
+      ],
+      "shortfall": 10,
+      "enumeration_complete": true,
+      "unresolved_classifications": [],
+      "full_sector_accepted": false,
+      "scope": "PROTOTYPE"
+    },
+    "implementation_version": "sector-selection-2"
+  }
+}

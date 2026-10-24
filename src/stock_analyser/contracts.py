@@ -7,7 +7,7 @@ from typing import Annotated, Literal, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, pattern=r"\S")]
 Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
@@ -65,6 +65,16 @@ class Instrument(Contract):
         default=Decimal("0.00000001"), gt=0, max_digits=28, decimal_places=8
     )
     provider_symbols: tuple[SymbolMapping, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_precision(self, handler):
+        # Instrument payloads participate in immutable snapshot/cache identities.
+        # Defaults must serialize exactly as they did before precision was added.
+        data = handler(self)
+        for field in ("quantity_increment", "price_increment"):
+            if getattr(self, field) == Decimal("0.00000001"):
+                data.pop(field, None)
+        return data
 
     @model_validator(mode="after")
     def nonoverlapping_symbols(self) -> Self:

@@ -105,3 +105,44 @@ def test_instrument_currency_venue_precision():
         validate_instrument(trade(price="1.001"), instrument)
     with pytest.raises(ValueError, match="venue/currency"):
         validate_instrument(trade(), instrument.model_copy(update={"quote_currency": "INR"}))
+
+
+def test_actual_base_instrument_and_universe_payloads_keep_immutable_identity():
+    """Fixture generated using the exact base commit, not reconstructed by new models."""
+    import json
+    from pathlib import Path
+
+    from stock_analyser.persistence.repositories import instrument_revision
+    from stock_analyser.universe import UniverseSnapshot, replay_universe
+
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures" / "us014-legacy-ledger-inputs.json").read_text()
+    )
+    assert legacy["source_commit"] == "68cd8b6326f76d74eca50060f5732e0b0968208e"
+    instrument = Instrument.model_validate(legacy["instrument"])
+    assert instrument.model_dump(mode="json") == legacy["instrument"]
+    assert instrument_revision(instrument) == legacy["instrument_revision"]
+    snapshot = UniverseSnapshot.model_validate(legacy["snapshot"])
+    assert snapshot.model_dump(mode="json") == legacy["snapshot"]
+    assert replay_universe(snapshot) == snapshot
+
+
+def test_nondefault_instrument_precision_is_serialized_and_changes_identity():
+    from stock_analyser.persistence.repositories import instrument_revision
+
+    instrument = Instrument(
+        instrument_id=uuid4(),
+        security_id=uuid4(),
+        market_id="US",
+        venue="XNAS",
+        symbol="CUSTOM",
+        quote_currency="USD",
+    )
+    custom = instrument.model_copy(
+        update={"quantity_increment": Decimal("1"), "price_increment": Decimal("0.01")}
+    )
+    payload = custom.model_dump(mode="json")
+    assert payload["quantity_increment"] == "1"
+    assert payload["price_increment"] == "0.01"
+    assert Instrument.model_validate(payload) == custom
+    assert instrument_revision(custom) != instrument_revision(instrument)

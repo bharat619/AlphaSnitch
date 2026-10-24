@@ -2039,3 +2039,52 @@ def test_ledger_lossless_fee_storage_and_missing_fx(database):
     (position,) = portfolio(database)
     assert position.quantity == confirmation.quantity
     assert position.cost_basis is None and not position.accounting_complete
+
+
+def test_legacy_instrument_and_snapshot_repositories_remain_immutable_compatible(database):
+    """Seed byte-equivalent pre-US-014 payloads, then read/re-save with new contracts."""
+    from stock_analyser.contracts import Instrument
+    from stock_analyser.persistence.repositories import instrument_revision
+
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures" / "us014-legacy-ledger-inputs.json").read_text()
+    )
+    payload = legacy["instrument"]
+    instrument = Instrument.model_validate(payload)
+    database.initialize()
+    with database.write() as repo:
+        repo.put_security(Security(security_id=instrument.security_id, name="Legacy fixture"))
+        repo.connection.execute(
+            sa.insert(s.instruments).values(
+                instrument_id=instrument.instrument_id,
+                security_id=instrument.security_id,
+                market_id=instrument.market_id,
+                venue=instrument.venue,
+                symbol=instrument.symbol,
+                currency=instrument.quote_currency,
+                payload=payload,
+            )
+        )
+        repo.connection.execute(
+            sa.insert(s.instrument_versions).values(
+                instrument_id=instrument.instrument_id,
+                revision=legacy["instrument_revision"],
+                payload=payload,
+            )
+        )
+        repo.connection.execute(
+            sa.insert(s.universe_snapshots).values(
+                snapshot_id=UUID(legacy["snapshot"]["snapshot_id"]),
+                payload=legacy["snapshot"],
+            )
+        )
+    with database.write() as repo:
+        restored = repo.get_instrument(instrument.instrument_id)
+        assert instrument_revision(restored) == legacy["instrument_revision"]
+        assert repo.put_instrument(restored) == legacy["instrument_revision"]
+        snapshot = repo.get_universe(UUID(legacy["snapshot"]["snapshot_id"]))
+        repo.put_universe(snapshot)
+        assert (
+            repo.connection.scalar(sa.select(sa.func.count()).select_from(s.instrument_versions))
+            == 1
+        )
