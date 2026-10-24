@@ -210,7 +210,11 @@ def universe_replay(
 
 
 def workflow_label(name: str) -> str:
-    return name if name in ("Buy", "Reports") else f"{name} [unavailable — not implemented]"
+    return (
+        name
+        if name in ("Buy", "Reports", "Portfolio", "Record offline trade")
+        else f"{name} [unavailable — not implemented]"
+    )
 
 
 def display(message: str) -> None:
@@ -278,6 +282,16 @@ def menu(runtime: Runtime) -> None:
                         None if source in scenarios else Path(source),
                         source if source in scenarios else None,
                     )
+                except EOFError:
+                    return
+                except Exception as exc:
+                    display(f"Error: {safe_error(exc)}")
+            elif choice in ("3", "4"):
+                try:
+                    if choice == "3":
+                        show_portfolio(runtime)
+                    else:
+                        prompt_trade(runtime)
                 except EOFError:
                     return
                 except Exception as exc:
@@ -714,4 +728,90 @@ def collect_prices(
         fail(exc)
     finally:
         if database is not None:
+            database.close()
+
+
+def show_portfolio(runtime):
+    from stock_analyser.ledger import portfolio
+
+    database = report_database(runtime)
+    try:
+        positions = portfolio(database)
+        if not positions:
+            display("Portfolio is empty.")
+        for position in positions:
+            display(position.model_dump_json(indent=2))
+    finally:
+        database.close()
+
+
+def confirm_trade(runtime, confirmation):
+    from stock_analyser.ledger import record_execution
+
+    display("Confirm actual offline execution (no broker order will be placed):")
+    display(confirmation.model_dump_json(indent=2))
+    if not typer.confirm("Record this execution?", default=False):
+        display("Cancelled; no ledger write.")
+        return
+    database = report_database(runtime)
+    try:
+        receipt = record_execution(database, confirmation)
+        display("Execution receipt:")
+        display(receipt.model_dump_json(indent=2))
+    finally:
+        database.close()
+
+
+def prompt_trade(runtime):
+    from stock_analyser.ledger import TradeConfirmation
+
+    values = {}
+    for field in (
+        "instrument_id",
+        "venue",
+        "side",
+        "quantity",
+        "price",
+        "currency",
+        "executed_at",
+        "idempotency_key",
+    ):
+        values[field] = Prompt.ask(field, console=console)
+    values["fees"] = json.loads(Prompt.ask("Itemized fees JSON", default="[]", console=console))
+    confirm_trade(runtime, TradeConfirmation.model_validate(values))
+
+
+@app.command("record-trade")
+def record_trade(ctx: typer.Context, input_path: Path = typer.Option(..., "--input")):
+    """Review a TradeConfirmation JSON file and explicitly confirm its recording."""
+    from stock_analyser.ledger import TradeConfirmation
+
+    try:
+        confirm_trade(ctx.obj, TradeConfirmation.model_validate_json(input_path.read_bytes()))
+    except Exception as exc:
+        fail(exc)
+
+
+@app.command("portfolio")
+def portfolio_command(ctx: typer.Context):
+    """Display FIFO holdings and currency-labelled accounting (including closed positions)."""
+    try:
+        show_portfolio(ctx.obj)
+    except Exception as exc:
+        fail(exc)
+
+
+@app.command("execution-receipt")
+def receipt_command(ctx: typer.Context, key: str):
+    """Replay the immutable receipt for an idempotency key."""
+    from stock_analyser.ledger import execution_receipt
+
+    database = None
+    try:
+        database = report_database(ctx.obj)
+        display(execution_receipt(database, key).model_dump_json(indent=2))
+    except Exception as exc:
+        fail(exc)
+    finally:
+        if database:
             database.close()

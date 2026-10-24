@@ -596,3 +596,60 @@ by US-011 qualification, so the command requires explicit `--input` or `--fixtur
 Every result is labeled **PROTOTYPE**, with incomplete coverage disclosed; it is
 not a completed full-sector top-ten scan. Holdings are unchanged and strategy,
 recommendations, trade intents and agent verdicts remain unrun.
+
+## Confirmed offline execution ledger (US-014)
+
+Run `stock-analyser init` to migrate PostgreSQL. Choose **Record offline trade**
+in the menu, or create a confirmation file using an existing internal instrument
+UUID (the listing is already stored by collection):
+
+```json
+{
+  "instrument_id": "00000000-0000-0000-0000-000000000001",
+  "venue": "XNAS",
+  "side": "BUY",
+  "quantity": "10",
+  "price": "100",
+  "currency": "USD",
+  "fees": [],
+  "executed_at": "2026-10-23T15:00:00Z",
+  "idempotency_key": "my-offline-purchase-001"
+}
+```
+
+```sh
+stock-analyser record-trade --input purchase.json
+stock-analyser portfolio
+stock-analyser execution-receipt my-offline-purchase-001
+```
+
+The command displays the full confirmation and requires an explicit `y` before
+writing. Declining writes nothing. Repeat the same confirmation/key to return the
+original receipt; changing an execution under the same key is rejected. Use a new
+key for each separate fill. `recommendation_id` and `run_id` are optional references;
+recording does not require a recommendation. No broker orders are submitted.
+
+To demonstrate FIFO, confirm the purchase above, then a separate SELL confirmation
+for `"quantity": "4"`, `"price": "110"`, a later timestamp and a new key. Portfolio
+shows six shares, USD 600 basis and USD 40 realized P&L. Reconfirm the sale and
+observe the same receipt and unchanged position. A further sale of seven fails.
+
+Executions are immutable, with lossless decimal strings and original fee currencies.
+Use decimal strings for all quantities, prices, fees and FX rates. Supported precision
+is 28 digits total and eight decimal places; instrument `quantity_increment` and
+`price_increment` profiles impose additional increment constraints (both default to
+0.00000001). Currency and venue must match the stored listing. Timestamps require
+an offset and cannot be in the future. No correction/reversal UI is provided yet.
+
+FIFO orders fills by execution timestamp, with ledger insertion order breaking ties.
+Backdated executions are accepted only if the entire resulting history remains
+nonnegative. Atomic PostgreSQL validation prevents concurrent sales from overselling.
+Each receipt freezes the resulting position at recording time; `portfolio` replays
+the complete current history and includes closed positions to retain realized P&L.
+Fees increase purchase basis or reduce sale proceeds. An itemized fee can include
+`{"amount":"1","currency":"EUR","fx_rate":"1.1","description":"commission"}`,
+where the explicit rate is execution-currency units per fee-currency unit. Missing
+FX makes affected basis/P&L null and accounting incomplete; quantities remain valid.
+Currency totals are never combined. Arithmetic uses 80-digit Decimal precision;
+partial-lot fees are prorated and a full close consumes the remaining basis exactly.
+This is internal portfolio bookkeeping, not tax reporting.
