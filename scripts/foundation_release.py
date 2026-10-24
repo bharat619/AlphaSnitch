@@ -15,6 +15,79 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+MANDATORY_CHECKLIST = "tests/test_persistence.py::test_foundation_release_fresh_process_checklist"
+
+
+def suite_environment(output):
+    env = {**os.environ, "STOCK_ANALYSER_ACCEPTANCE_EVIDENCE": str(output / "reopen.json")}
+    # Local pytest preferences must not narrow a release acceptance run.
+    env.pop("PYTEST_ADDOPTS", None)
+    return env
+
+
+def collect_suite(env):
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "-o", "addopts=", "--collect-only", "-q", "tests"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.startswith("tests/") and "::" in line
+    ]
+
+
+def fixture_acceptance(xml_path, expected, reopen_path):
+    result = fixture_result(xml_path) if xml_path.exists() else {"passed": False}
+    actual = []
+    if xml_path.exists():
+        for case in ET.parse(xml_path).getroot().iter("testcase"):
+            # JUnit classnames encode module/class scope with dots.
+            scope = case.get("classname", "").split(".")
+            module = next(
+                (i for i, part in enumerate(scope) if part.startswith("Test")), len(scope)
+            )
+            actual.append(
+                "/".join(scope[:module])
+                + ".py::"
+                + "::".join([*scope[module:], case.get("name", "")])
+            )
+    result["expected_tests"] = len(expected)
+    result["complete_suite"] = MANDATORY_CHECKLIST in expected and sorted(actual) == sorted(
+        expected
+    )
+    result["fresh_process_checklist"] = False
+    try:
+        evidence = json.loads(reopen_path.read_text())
+        reports = evidence["reports"]
+        result["fresh_process_checklist"] = (
+            evidence["configuration_migrations_trade_confirmation_resume"] == "PASS"
+            and len(reports) == 3
+            and sorted(report["mode"] for report in reports) == ["buy", "sell", "sell"]
+            and all(
+                report["fresh_process_reopen"] is True
+                and set(report["artifacts"]) == {"manifest.json", "report.json", "report.md"}
+                and all(
+                    len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+                    for value in report["artifacts"].values()
+                )
+                for report in reports
+            )
+        )
+        result["reopen_sha256"] = hashlib.sha256(reopen_path.read_bytes()).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    result["passed"] = (
+        result["passed"] and result["complete_suite"] and result["fresh_process_checklist"]
+    )
+    return result
 
 
 def fixture_result(xml_path):
@@ -70,10 +143,14 @@ def main():
         parser.error("Set STOCK_ANALYSER_TEST_DATABASE_URL to a disposable PostgreSQL server")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    env = {**os.environ, "STOCK_ANALYSER_ACCEPTANCE_EVIDENCE": str(output / "reopen.json")}
+    env = suite_environment(output)
+    expected = collect_suite(env)
     xml = output / "pytest.xml"
-    checks = run([sys.executable, "-m", "pytest", "-q", "--junitxml", str(xml)], env=env)
-    fixtures = fixture_result(xml) if xml.exists() else {"passed": False}
+    checks = run(
+        [sys.executable, "-m", "pytest", "-o", "addopts=", "-q", "tests", "--junitxml", str(xml)],
+        env=env,
+    )
+    fixtures = fixture_acceptance(xml, expected, output / "reopen.json")
     fixtures["process"] = checks
     fixtures["passed"] = fixtures["passed"] and checks["exit_code"] == 0
     live = {"status": "NOT_RUN", "publication_timing": "unverified"}

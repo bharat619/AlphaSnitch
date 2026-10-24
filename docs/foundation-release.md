@@ -53,6 +53,12 @@ configuration is a preflight error. Install is the preceding locked sync step, n
 an implied result of passing tests in an already installed environment. Retain its
 terminal result with release evidence when qualifying a clean installation.
 
+The runner ignores inherited `PYTEST_ADDOPTS` selection flags, clears configured
+pytest `addopts`, and explicitly targets `tests/`. It independently collects the
+expected test IDs and requires an exact match in the executed JUnit cases. Fixture
+acceptance also requires the mandatory fresh-process checklist and its successful
+three-report reopen evidence; a passing subset or missing evidence cannot pass.
+
 `reopen.json` records actual artifact hashes and fresh-process reopen results from
 `test_foundation_release_fresh_process_checklist`. That test runs configuration,
 idempotent migrations, fixture Buy, cancelled and confirmed trade recording,
