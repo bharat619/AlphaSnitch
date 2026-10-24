@@ -52,7 +52,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0003"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0004"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -629,15 +629,222 @@ def test_rejected_provenance_is_frozen_and_linked_to_failed_run(
     assert hashlib.sha256(raw).hexdigest() == diagnostic["raw_sha256"]
 
 
-def collect_report(database, tmp_path, monkeypatch, scenario="valid"):
+def collect_report(database, tmp_path, monkeypatch, scenario="valid", research=None):
     monkeypatch.setenv(
         "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
     )
     result = CliRunner().invoke(
-        app, ["--data-dir", str(tmp_path), "collect-fixture", "--scenario", scenario]
+        app,
+        ["--data-dir", str(tmp_path), "collect-fixture", "--scenario", scenario]
+        + (["--research-scenario", research] if research else []),
     )
     assert result.exit_code == (0 if scenario == "valid" else 1), result.output
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["relevant", "irrelevant", "empty", "failed", "conflicting-event"]
+)
+def test_research_saved_with_reports_and_immutable_recovery(
+    database, tmp_path, monkeypatch, scenario
+):
+    from stock_analyser.reports import ReportService
+
+    output = collect_report(database, tmp_path, monkeypatch, research=scenario)
+    run_id = UUID(output["run_id"])
+    reports = ReportService(database, tmp_path / "reports")
+    frozen = reports.freeze(run_id)
+    assert len(frozen.research) == 1
+    record = frozen.research[0]
+    with database.read() as repo:
+        assert repo.list_research(run_id) == frozen.research
+    manifest = json.loads(Path(output["manifest"]).read_bytes())
+    assert manifest["research"] == [record.model_dump(mode="json")]
+    markdown = Path(output["report"]).read_text()
+    assert "News coverage and earnings uncertainty" in markdown
+    assert f"Earnings {record.earnings.state}" in markdown
+    assert "mandatory gate cleared: False" in markdown
+    before = Path(output["report_json"]).read_bytes()
+    Path(output["report_json"]).unlink()
+    reports.generate(run_id)
+    assert Path(output["report_json"]).read_bytes() == before
+    with database.write() as repo:
+        repo.put_research(record)
+    changed = record.model_copy(
+        update={"news": record.news.model_copy(update={"reason": "Changed"})}
+    )
+    with pytest.raises(ValueError, match="after report freeze"):
+        with database.write() as repo:
+            repo.put_research(changed)
+
+
+def test_research_survives_report_write_failure(database, tmp_path, monkeypatch):
+    from stock_analyser import reports
+
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    with monkeypatch.context() as patch:
+
+        def fail_write(*args):
+            raise OSError("Synthetic destination failure")
+
+        patch.setattr(reports, "atomic_write", fail_write)
+        result = CliRunner().invoke(
+            app,
+            [
+                "--data-dir",
+                str(tmp_path),
+                "collect-fixture",
+                "--research-scenario",
+                "conflicting-event",
+            ],
+        )
+        assert result.exit_code == 1
+    with database.read() as repo:
+        run = repo.list_runs()[0]
+        record = repo.list_research(run.run_id)[0]
+        assert record.earnings.state == "CONFLICTING"
+        assert repo.get_report_input(run.run_id).research == (record,)
+    service = reports.ReportService(database, tmp_path / "reports")
+    service.generate(run.run_id)
+    assert "Earnings CONFLICTING" in service.show(run.run_id)
+
+
+@pytest.mark.parametrize("cooldown", [False, True])
+@pytest.mark.parametrize("price_failure", [False, True])
+def test_news_uses_massive_after_yfinance_prices(
+    database, tmp_path, monkeypatch, cooldown, price_failure
+):
+    from pydantic import SecretStr
+
+    from stock_analyser.config import load_runtime
+    from stock_analyser.contracts import DataReadinessReport
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.live import collect_smoke
+    from stock_analyser.massive import (
+        HttpResponse,
+        MassiveClient,
+        MassiveSettings,
+        ProviderAllowance,
+    )
+    from stock_analyser.reports import ReportInput, ReportService
+
+    class Prices:
+        def __init__(self, plans):
+            pass
+
+        def fetch(self, instrument, market, resolution):
+            if price_failure:
+                raise OSError("Synthetic price failure")
+            response = RawFixtureProvider().fetch(instrument, market, resolution)
+            return response.model_copy(
+                update={
+                    "provider": "yfinance",
+                    "feed": market.route("long_history_prices").feed,
+                    "provider_symbol": instrument.provider_symbol(
+                        "yfinance", resolution.session_date
+                    ),
+                }
+            )
+
+    monkeypatch.setattr("stock_analyser.yfinance.YFinancePriceProvider", Prices)
+    database.initialize()
+    runtime = load_runtime(data_dir=tmp_path)
+    requested = datetime(2026, 10, 17, tzinfo=UTC)
+    now, calls, factory_calls = [1000.0], [], []
+
+    def transport(target, key, timeout):
+        calls.append(target)
+        assert target.startswith("/v2/reference/news?")
+        # Deterministically interleave a separate report reader while news is fetching,
+        # after price collection has already finished (including publication-unverified
+        # history and provider failures, both of which can mark the price run FAILED).
+        with database.read() as repo:
+            pending = repo.list_runs()[0]
+            instrument = repo.get_instrument(pending.request.instrument_ids[0])
+            assert pending.status in (OperationalStatus.SUCCEEDED, OperationalStatus.FAILED)
+            assert not repo.list_research(pending.run_id)
+        reports = ReportService(database, runtime.reports_dir)
+        with pytest.raises(ValueError, match="saved research"):
+            reports.generate(pending.run_id)
+        # The serialized write boundary must also reject callers bypassing ReportService.
+        premature = ReportInput(
+            run_id=pending.run_id,
+            run=pending,
+            report=DataReadinessReport(
+                run_id=pending.run_id, request=pending.request, status=pending.status
+            ),
+            instruments=(instrument,),
+            collection_stages=(),
+            snapshots=(),
+            packets=(),
+        )
+        with pytest.raises(ValueError, match="saved research"):
+            with database.write() as repo:
+                repo.put_report_input(premature)
+        with database.read() as repo:
+            with pytest.raises(LookupError):
+                repo.get_report_input(pending.run_id)
+            assert all(a.name == "manifest.json" for a in repo.list_artifacts(pending.run_id))
+        if cooldown:
+            return HttpResponse(429, {"Retry-After": "300"}, b"{}")
+        return HttpResponse(
+            200,
+            {},
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "id": "one",
+                            "article_url": "https://example.com/news/one",
+                            "published_utc": "2026-10-16T12:00:00Z",
+                            "tickers": ["AAPL", "SPY"],
+                        }
+                    ]
+                }
+            ).encode(),
+        )
+
+    with ProviderAllowance(
+        tmp_path / "news.lock",
+        5,
+        clock=lambda: now[0],
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+    ) as allowance:
+        client = MassiveClient(SecretStr("private-key"), allowance, MassiveSettings(), transport)
+
+        def factory():
+            factory_calls.append(True)
+            return client
+
+        results = collect_smoke(
+            database,
+            runtime,
+            requested=requested,
+            routed=True,
+            weekly_bars=2,
+            news=True,
+            massive_client_factory=factory,
+        )
+    assert len(factory_calls) == 1
+    assert len(results) == len(calls) == (1 if cooldown else 2)
+    for result in results:
+        assert result["history_complete"] == (not price_failure)
+        data = json.loads(Path(result["report_json"]).read_bytes())
+        assert data["run"]["price_routing"]["route"]["provider"] == "yfinance"
+        assert data["research"][0]["news"]["provider"] == "massive"
+        assert data["research"][0]["news"]["status"] == ("FAILED" if cooldown else "COMPLETE")
+        assert result["collection_stopped"] == cooldown
+        service = ReportService(database, runtime.reports_dir)
+        run_id = UUID(result["run_id"])
+        frozen = service.freeze(run_id)
+        assert len(frozen.research) == 1
+        if not cooldown:
+            assert frozen.research[0].news.items[0].provider_id == "one"
+        saved = Path(result["report_json"]).read_bytes()
+        service.generate(run_id)
+        assert Path(result["report_json"]).read_bytes() == saved
 
 
 def test_cache_replay_correction_and_unchanged_report_inputs(database, tmp_path, monkeypatch):
@@ -1048,7 +1255,9 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
         monkeypatch.setenv(
             "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
         )
-        command = CliRunner().invoke(app, ["--data-dir", str(tmp_path), "collect-massive"])
+        command = CliRunner().invoke(
+            app, ["--data-dir", str(tmp_path), "collect-massive", "--news"]
+        )
         assert command.exit_code == (0 if scenario == "complete" else 1), command.output
         results = json.loads(command.stdout)["reports"]
         if scenario == "complete":
@@ -1058,10 +1267,22 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
                 lambda: pytest.fail("Replay loaded provider credentials"),
             )
             replayed = CliRunner().invoke(
-                app, ["--data-dir", str(tmp_path), "collect-massive", "--cache-mode", "replay"]
+                app,
+                [
+                    "--data-dir",
+                    str(tmp_path),
+                    "collect-massive",
+                    "--cache-mode",
+                    "replay",
+                    "--news",
+                ],
             )
             assert replayed.exit_code == 0, replayed.output
             assert calls == before
+            replay_report = json.loads(
+                Path(json.loads(replayed.stdout)["reports"][0]["report_json"]).read_bytes()
+            )
+            assert replay_report["research"][0]["news"]["status"] == "NOT_REQUESTED"
     if scenario == "long-cooldown":
         assert len(calls) == 1
         assert float((tmp_path / "provider.lock").read_text()) == now[0] + 300
@@ -1079,6 +1300,11 @@ def test_massive_smoke_reports_with_controlled_transport(database, tmp_path, mon
             "UNAVAILABLE" if scenario in ("http-error", "empty", "long-cooldown") else "PARTIAL"
         )
         assert "private-live-key" not in text
+        assert data["research"][0]["news"]["status"] == (
+            "FAILED" if scenario in ("http-error", "long-cooldown") else "EMPTY"
+        )
+        assert data["research"][0]["earnings"]["state"] == "UNKNOWN"
+        assert data["research"][0]["earnings"]["mandatory_gate_cleared"] is False
         assert data["report"]["stages"]["verdict"] == "NOT_RUN"
         if scenario not in ("http-error", "long-cooldown"):
             assert len(data["packets"]) == 2

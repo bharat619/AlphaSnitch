@@ -87,7 +87,7 @@ class CalendarReference(Contract):
 
 class FeedCoverage(Contract):
     feed_id: Text
-    kind: Literal["consolidated", "venue", "synthetic"]
+    kind: Literal["consolidated", "venue", "synthetic", "discovery"]
     venues: tuple[Text, ...] = Field(min_length=1)
 
 

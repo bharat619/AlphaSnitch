@@ -176,6 +176,58 @@ class Repositories:
 
         return self._get(s.report_inputs, s.report_inputs.c.run_id == run_id, ReportInput)
 
+    def put_research(self, record) -> None:
+        from stock_analyser.research import ResearchRecord
+
+        record = ResearchRecord.model_validate(record.model_dump(mode="json"))
+        run = self.get_run(record.run_id)
+        run.market.validate_instrument(record.instrument)
+        if (
+            record.instrument.instrument_id not in run.request.instrument_ids
+            or record.news.window_end != run.request.requested_as_of
+            or record.news.provider != run.market.route("research").provider
+            or record.news.provider_symbol
+            != record.instrument.provider_symbol(
+                record.news.provider, run.request.requested_as_of.date()
+            )
+            or any(o.exchange_timezone != run.market.timezone for o in record.earnings.observations)
+        ):
+            raise ValueError("Research differs from frozen run scope")
+        keys = {"run_id": record.run_id, "instrument_id": record.instrument.instrument_id}
+        if (
+            self.connection.scalar(
+                sa.select(s.report_inputs.c.run_id).where(s.report_inputs.c.run_id == record.run_id)
+            )
+            is not None
+        ):
+            # Idempotent retries are fine; a frozen report must never miss a later addition.
+            existing = self.list_research(record.run_id)
+            if record not in existing:
+                raise ValueError("Research cannot change after report freeze")
+        self._immutable(s.research_records, keys, record)
+
+    def list_research(self, run_id: UUID):
+        from stock_analyser.research import ResearchRecord
+
+        values = self.connection.scalars(
+            sa.select(s.research_records.c.payload)
+            .where(s.research_records.c.run_id == run_id)
+            .order_by(s.research_records.c.instrument_id)
+        )
+        return tuple(ResearchRecord.model_validate(value) for value in values)
+
+    def research_for_report(self, run: RunRecord):
+        records = self.list_research(run.run_id)
+        if run.configuration.get("news_requested") and not set(run.request.instrument_ids) <= {
+            record.instrument.instrument_id for record in records
+        }:
+            # Price collection can finish before news. An immutable coverage record,
+            # including FAILED/NOT_REQUESTED, is the research completion boundary.
+            raise ValueError(
+                "Reporting requires saved research coverage for every requested instrument"
+            )
+        return records
+
     def put_report_input(self, report_input) -> None:
         from stock_analyser.reports import ReportInput
         from stock_analyser.security import redact_values
@@ -186,6 +238,11 @@ class Repositories:
         )
         if report_input.run != frozen_run:
             raise ValueError("Report input differs from persisted run")
+        if report_input.research != tuple(
+            type(record).model_validate(redact_values(record.model_dump(mode="json")))
+            for record in self.research_for_report(frozen_run)
+        ):
+            raise ValueError("Report research differs from persisted evidence")
         self._immutable(s.report_inputs, {"run_id": report_input.run_id}, report_input)
 
     def set_run_status(

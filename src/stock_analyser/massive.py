@@ -45,6 +45,9 @@ class MassiveSettings(BaseModel):
     max_requests: int = Field(default=100, ge=1, le=10000)
     max_retry_delay_seconds: float = Field(default=120, ge=1, le=3600, allow_inf_nan=False)
     page_size: int = Field(default=50000, ge=1, le=50000)
+    news_page_size: int = Field(default=100, ge=1, le=1000)
+    news_max_pages: int = Field(default=3, ge=1, le=100)
+    news_lookback_days: int = Field(default=7, ge=1, le=365)
 
 
 @dataclass(frozen=True)

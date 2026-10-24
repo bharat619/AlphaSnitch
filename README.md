@@ -497,3 +497,23 @@ uv run --locked pytest -q tests/test_cache.py
 # Requires STOCK_ANALYSER_TEST_DATABASE_URL, as described above:
 uv run --locked pytest -q tests/test_persistence.py -k cache
 ```
+
+## News coverage and earnings uncertainty
+
+Add `--news` to `collect-massive` or `collect-prices` to discover Massive news
+within a bounded publication window. Reports retain metadata, deduplication and
+pagination findings, and distinguish ticker association from material relevance.
+Empty or failed retrieval is explicitly recorded as a coverage result. Earnings
+remain unknown until independently corroborated; unknown/conflicting events
+cannot clear a future mandatory gate. No research is sent to a model.
+
+```sh
+uv run stock-analyser collect-prices --news
+uv run stock-analyser collect-fixture --research-scenario relevant
+uv run stock-analyser collect-fixture --research-scenario irrelevant
+uv run stock-analyser collect-fixture --research-scenario empty
+uv run stock-analyser collect-fixture --research-scenario conflicting-event
+```
+
+See [research evidence](docs/research-evidence.md) for retention fields, settings,
+earnings timezones, failure semantics, and offline report recovery.

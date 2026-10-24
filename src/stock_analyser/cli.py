@@ -182,6 +182,11 @@ def collect_fixture(
     scenario: str = typer.Option(
         "valid", help="Synthetic scenario: valid, missing-bar, or provider-failure."
     ),
+    research_scenario: str | None = typer.Option(
+        None,
+        help="Research fixture: relevant, irrelevant, empty, failed, known-event, "
+        "unknown-event, or conflicting-event.",
+    ),
 ) -> None:
     """Freeze one synthetic stock's evidence and persist quality outcomes."""
     from datetime import UTC, date, datetime
@@ -192,6 +197,7 @@ def collect_fixture(
     from stock_analyser.contracts import AnalysisRequest, HistoryRequirement, Security
     from stock_analyser.fixtures import (
         RawFixtureProvider,
+        research_fixture,
         synthetic_markets,
         synthetic_session_calendars,
     )
@@ -211,6 +217,11 @@ def collect_fixture(
         instrument = instruments.resolve("US", "ACME")
         _, calendars = synthetic_session_calendars()
         requested = datetime(2026, 10, 16, 21, tzinfo=UTC)
+        research = (
+            research_fixture(instrument, market, requested, research_scenario)
+            if research_scenario
+            else None
+        )
         history = HistoryRequirement(timeframe="daily", minimum_bars=3)
         resolution = HistoryResolver(
             calendars[0],
@@ -228,7 +239,7 @@ def collect_fixture(
                 history=(history,),
             ),
             market=market,
-            configuration={"fixture": scenario},
+            configuration={"fixture": scenario, "research_fixture": research_scenario},
             source_version=source_version(),
             component_versions={"fixture": "raw-synthetic-1"},
             history_resolutions=(resolution,),
@@ -237,6 +248,12 @@ def collect_fixture(
             repo.put_security(Security(security_id=instrument.security_id, name="Synthetic ACME"))
             repo.put_instrument(instrument)
             repo.create_run(run)
+            if research is not None:
+                from stock_analyser.research import ResearchRecord
+
+                repo.put_research(
+                    ResearchRecord(run_id=run.run_id, instrument=instrument, **research)
+                )
         try:
             CollectionService(database, runtime.snapshots_dir).collect(
                 run.run_id, instrument, provider
@@ -361,6 +378,7 @@ def report_regenerate(ctx: typer.Context, run_id: UUID) -> None:
 def collect_massive(
     ctx: typer.Context,
     cache_mode: CacheMode = typer.Option(CacheMode.REUSE),
+    news: bool = typer.Option(False, help="Also collect bounded Massive news discovery metadata."),
 ) -> None:
     """Opt in to bounded live AAPL/SPY daily/weekly collection and saved reports."""
     from contextlib import ExitStack
@@ -386,7 +404,7 @@ def collect_massive(
             )
             database = report_database(runtime)
             database.initialize()
-            results = collect_smoke(database, runtime, client, cache_mode=cache_mode)
+            results = collect_smoke(database, runtime, client, cache_mode=cache_mode, news=news)
         display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
         if any(not r["history_complete"] or r["collection_stopped"] for r in results):
             raise typer.Exit(1)
@@ -408,6 +426,7 @@ def collect_prices(
         CacheMode.REUSE,
         help="Reuse fresh evidence, refresh overlap, replay offline, or bypass cache.",
     ),
+    news: bool = typer.Option(False, help="Also collect bounded Massive news discovery metadata."),
 ) -> None:
     """Collect AAPL/SPY using one capable approved source for mandatory history."""
     from contextlib import ExitStack
@@ -437,6 +456,7 @@ def collect_prices(
                 weekly_bars=weekly_bars,
                 massive_client_factory=massive_client,
                 cache_mode=cache_mode,
+                news=news,
             )
         display(json.dumps({"reports": results, "fresh_readiness": False}, indent=2))
         if any(not r["history_complete"] or r["collection_stopped"] for r in results):
