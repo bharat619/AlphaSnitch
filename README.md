@@ -1,6 +1,6 @@
 # Stock market analyser
 
-Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. [US-005](https://github.com/bharat619/AlphaSnitch/issues/5) freezes and validates fixture evidence; [US-006](https://github.com/bharat619/AlphaSnitch/issues/6) saves, reopens and regenerates data-readiness reports. Reports is available from the menu. Buy, Sell, Portfolio and Record offline trade remain visibly **unavailable** until their implementation stories land. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
+Local Python CLI foundation for AlphaSnitch, plus architecture and provider-evaluation work. Issues [US-001](https://github.com/bharat619/AlphaSnitch/issues/1) and [US-002](https://github.com/bharat619/AlphaSnitch/issues/2) add installation, configuration, the command menu, diagnostics, and market-aware contracts. [US-003](https://github.com/bharat619/AlphaSnitch/issues/3) adds PostgreSQL persistence and initialization. [US-004](https://github.com/bharat619/AlphaSnitch/issues/4) adds completed-session and history resolution. [US-005](https://github.com/bharat619/AlphaSnitch/issues/5) freezes and validates fixture evidence; [US-006](https://github.com/bharat619/AlphaSnitch/issues/6) saves, reopens and regenerates data-readiness reports. The menu includes prototype Buy collection, open-holdings Sell collection, Portfolio, Record offline trade, and Reports. The Python scripts in `evaluation/` remain isolated, read-only evaluation tools.
 
 ## Market-aware contracts (US-002)
 
@@ -701,3 +701,43 @@ apply the 2:1 split twice with one key (20 shares, basis 1000), sell 8 at 60,
 then correct the original buy to 12 at 90. Final lots contain 16 shares with basis
 720 and realized P&L 120; the correction links the original execution, reason,
 recording timestamp, and new portfolio revision.
+
+### Sell collection workflow (US-016)
+
+Choose **Sell** in the menu and enter a frozen evidence JSON path or a synthetic
+scenario. The command equivalents are:
+
+```sh
+stock-analyser scan sell --input sell-evidence.json
+stock-analyser scan sell --fixture valid
+stock-analyser scan sell --fixture one-holding-failure
+```
+
+The database must already contain confirmed offline trades. Synthetic scenarios
+supply evidence only; they never create trades or holdings. Every positive-quantity
+US holding is selected, including holdings ineligible for a new buy. There is no
+ten-stock limit, sector filter, or liquidity screen. Closed positions and holdings
+in other markets are excluded; unsupported public markets are rejected.
+
+`--input` accepts a `stock_analyser.sell.SellEvidence` JSON object with `market`
+(the complete approved market context), `requested_as_of`, `history` (daily/weekly
+requirements), `cutoff_policy`, and `histories` (retained `SnapshotReference`
+objects). Collection verifies and replays those frozen raw files without provider
+network requests. Missing evidence becomes a saved per-holding failure. Fixture
+mode uses synthetic market configuration and calendars, clearly labeled in the
+report, and requires compatible fixture provider mappings on existing holdings.
+
+The report freezes the portfolio revision, instrument/venue/currency identity,
+remaining FIFO lots, cost basis and effective entry execution links (including
+optional recommendation/run IDs). Thesis and invalidation text are marked
+unavailable because the current execution ledger does not store them. Exposure
+shows selected quantity and cost basis in each holding's own currency; current
+market value is explicitly unavailable at selection, rather than inferred from
+cost or stale evidence. Price evidence retains its own cutoff and provenance.
+
+Workers use `stock_concurrency` and the same shared provider access lane as buy
+collection. All holdings remain visible when collection fails; partial scans exit
+nonzero after saving a report. Empty portfolios save an `EMPTY_PORTFOLIO` report.
+A completion revision check discloses any portfolio change since selection; later
+changes do not rewrite frozen reports. Scans write evidence and reports only.
+SELL/HOLD verdicts and automatic portfolio mutation remain unrun.

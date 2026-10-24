@@ -41,12 +41,15 @@ def test_help_is_available_without_config_or_credentials(monkeypatch):
     assert "doctor" in help_text
 
 
-def test_menu_and_unavailable_workflow(tmp_path):
-    result = runner.invoke(app, ["--data-dir", str(tmp_path / "runtime")], input="2\n6\n")
+def test_menu_sell_workflow(tmp_path, monkeypatch):
+    from stock_analyser import cli
+
+    monkeypatch.setattr(cli, "run_sell", lambda *args: cli.display("Sell collection started"))
+    result = runner.invoke(app, ["--data-dir", str(tmp_path / "runtime")], input="2\nvalid\n6\n")
     assert result.exit_code == 0
     for label in ("Buy", "Sell", "Portfolio", "Record offline trade", "Reports", "Exit"):
         assert label in result.output
-    assert "Sell is unavailable" in result.output
+    assert "Sell collection started" in result.output
     assert "Buy [unavailable" not in result.output
     assert "active market: US" in result.output
     assert not (tmp_path / "runtime").exists()

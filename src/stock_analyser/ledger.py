@@ -273,6 +273,57 @@ def portfolio(database) -> list[Position]:
     return portfolio_state(database)[0]
 
 
+def freeze_open_holdings(database, market_id):
+    """Freeze identities, remaining lots and effective entry links in one snapshot."""
+    with database.read() as repo:
+        repo.connection.execution_options(isolation_level="REPEATABLE READ")
+        history, events = _history(repo.connection), _events(repo.connection)
+        grouped = {}
+        for receipt in history:
+            grouped.setdefault(receipt.confirmation.instrument_id, []).append(receipt)
+        holdings = []
+        for instrument_id, rows in grouped.items():
+            position = _replay(rows, events)
+            instrument = repo.get_instrument(instrument_id)
+            if position.quantity <= 0 or instrument.market_id != market_id:
+                continue
+            active = {r.execution_id: r.confirmation for r in rows}
+            for event in events:
+                operation = event.operation
+                if isinstance(operation, Correction) and operation.target_execution_id in active:
+                    active[operation.target_execution_id] = operation.replacement
+            entries = []
+            for lot in position.lots:
+                trade = active[lot.execution_id]
+                entries.append(
+                    {
+                        "execution_id": str(lot.execution_id),
+                        "confirmation": trade.model_dump(mode="json"),
+                        "entry_thesis": None,
+                        "invalidation": None,
+                        "context_status": "UNAVAILABLE: ledger retains execution links; "
+                        "thesis/invalidation text was not recorded",
+                    }
+                )
+            holdings.append(
+                {
+                    "instrument": instrument.model_dump(mode="json"),
+                    "position": position.model_dump(mode="json"),
+                    "entries": entries,
+                    "exposure": {
+                        "quantity": str(position.quantity),
+                        "currency": position.currency,
+                        "cost_basis": str(position.cost_basis)
+                        if position.cost_basis is not None
+                        else None,
+                        "market_value": None,
+                        "market_value_status": "UNAVAILABLE: no current valuation at selection",
+                    },
+                }
+            )
+        return holdings, _revision(history, events)
+
+
 def execution_receipt(database, key: str) -> ExecutionReceipt:
     with database.read() as repo:
         payload = repo.connection.scalar(

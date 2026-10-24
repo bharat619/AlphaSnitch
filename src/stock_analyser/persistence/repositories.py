@@ -159,7 +159,9 @@ class Repositories:
         run = RunRecord.model_validate(run.model_dump(mode="json"))
         self.put_market(run.market)
         for instrument_id in run.request.instrument_ids:
-            run.market.validate_instrument(self.get_instrument(instrument_id))
+            self._validate_scope(
+                run, instrument_id, allow_unsupported_context=run.request.mode == "sell"
+            )
         self._immutable(
             s.runs,
             {"run_id": run.run_id},
@@ -280,8 +282,17 @@ class Repositories:
         run: RunRecord,
         instrument_id: UUID,
         instrument: Instrument | None = None,
+        *,
+        allow_unsupported_context: bool = False,
     ) -> None:
-        run.market.validate_instrument(instrument or self.get_instrument(instrument_id))
+        instrument = instrument or self.get_instrument(instrument_id)
+        if allow_unsupported_context:
+            # Retain an existing holding and its failure even when collection
+            # lacks its calendar/currency. Trusted snapshots still require full validation.
+            if instrument.market_id != run.market.market_id:
+                raise ValueError("Holding market differs from sell run market")
+        else:
+            run.market.validate_instrument(instrument)
         if run.request.instrument_ids and instrument_id not in run.request.instrument_ids:
             raise ValueError("Instrument is outside requested run scope")
 
@@ -289,7 +300,13 @@ class Repositories:
         stage = StageRecord.model_validate(stage.model_dump(mode="json"))
         run = self.get_run(stage.run_id)
         if stage.instrument_id is not None:
-            self._validate_scope(run, stage.instrument_id)
+            self._validate_scope(
+                run,
+                stage.instrument_id,
+                allow_unsupported_context=(
+                    run.request.mode == "sell" and stage.status == OperationalStatus.FAILED
+                ),
+            )
         keys = {
             "run_id": stage.run_id,
             "name": stage.name,
