@@ -1,13 +1,10 @@
 """Read-only collection for every open holding in a frozen portfolio revision."""
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
 
 from pydantic import AwareDatetime, Field
 
-from stock_analyser.buy import SharedProvider
 from stock_analyser.calendars import CutoffPolicy, ExchangeCalendarAdapter, HistoryResolver
-from stock_analyser.collection import CollectionService
 from stock_analyser.contracts import (
     AnalysisRequest,
     Contract,
@@ -16,10 +13,9 @@ from stock_analyser.contracts import (
     MarketContext,
     OperationalStatus,
 )
-from stock_analyser.ledger import freeze_open_holdings, portfolio_revision
+from stock_analyser.ledger import freeze_open_holdings
 from stock_analyser.markets import MarketRegistry
-from stock_analyser.persistence.records import RunRecord, SnapshotReference, StageRecord
-from stock_analyser.reports import ReportService
+from stock_analyser.persistence.records import RunRecord, SnapshotReference
 from stock_analyser.version import source_version
 
 
@@ -34,7 +30,14 @@ class SellEvidence(Contract):
 
 
 def collect_sell(
-    database, runtime, evidence, provider, *, history_resolver=None, progress=lambda message: None
+    database,
+    runtime,
+    evidence,
+    provider,
+    *,
+    history_resolver=None,
+    progress=lambda message: None,
+    provider_spec=None,
 ):
     MarketRegistry().resolve(evidence.market.market_id)
     if evidence.market.market_id != runtime.market:
@@ -45,7 +48,6 @@ def collect_sell(
     resolver = history_resolver or HistoryResolver(
         ExchangeCalendarAdapter(), evidence.cutoff_policy
     )
-    provider = SharedProvider(provider)
     progress(
         f"Sell selection: {len(holdings)} open holdings; "
         f"portfolio revision: {revision}; market: {runtime.market}"
@@ -90,52 +92,23 @@ def collect_sell(
             repo.create_run(child)
         children.append((child, instrument))
 
-    def collect(child, instrument):
-        if child.status != OperationalStatus.FAILED:
-            try:
-                CollectionService(database, runtime.snapshots_dir).collect(
-                    child.run_id, instrument, provider
-                )
-            except Exception:
-                with database.write() as repo:
-                    repo.set_run_status(
-                        child.run_id,
-                        OperationalStatus.FAILED,
-                        "Holding collection could not finish",
-                    )
-        with database.read() as repo:
-            return repo.get_run(child.run_id), repo.list_snapshots(child.run_id)
+    from stock_analyser.resume import CollectionJob, ResumePlan, execute_plan, provider_recipe
 
-    outcomes = []
-    with ThreadPoolExecutor(max_workers=runtime.stock_concurrency) as executor:
-        futures = {executor.submit(collect, child, i): i for child, i in children}
-        for future in as_completed(futures):
-            child, refs = future.result()
-            outcomes.append((child, refs, futures[future]))
-            progress(
-                f"Collection {len(outcomes)}/{len(instruments)}: "
-                f"{futures[future].symbol} {child.status.value}"
-            )
-    observed_revision = portfolio_revision(database)
-    changed = observed_revision != revision
-    failures = sum(child.status != OperationalStatus.SUCCEEDED for child, _, _ in outcomes)
-    status = OperationalStatus.PARTIAL if failures else OperationalStatus.SUCCEEDED
-    reason = (
-        "EMPTY_PORTFOLIO: no positive-quantity holdings in selected market"
-        if not holdings
-        else f"{len(holdings)} open holdings; {failures} collection failures"
-    )
-    reason += (
-        "; portfolio changed after selection"
-        if changed
-        else "; portfolio revision unchanged at completion check"
+    if provider_spec and provider_spec.get("scenario") == "provider-failure" and instruments:
+        provider_spec = {**provider_spec, "failure_symbols": [instruments[0].symbol]}
+        if hasattr(provider, "failed_id"):
+            provider.failed_id = instruments[0].instrument_id
+    plan = ResumePlan(
+        jobs=tuple(CollectionJob(run_id=c.run_id, instrument=i) for c, i in children),
+        provider=provider_spec or provider_recipe(provider),
+        stock_concurrency=runtime.stock_concurrency,
     )
     scope = {
         "selection_outcome": "OPEN_HOLDINGS" if holdings else "EMPTY_PORTFOLIO",
         "holdings": holdings,
         "selected_revision": revision,
-        "observed_revision": observed_revision,
-        "portfolio_changed": changed,
+        "observed_revision": revision,
+        "portfolio_changed": False,
         "revision_check": "after collection; later changes are not tracked by this frozen report",
         "stock_concurrency": runtime.stock_concurrency,
         "child_run_ids": [str(c.run_id) for c, _ in children],
@@ -144,26 +117,11 @@ def collect_sell(
         run_id=uuid4(),
         request=request(tuple(i.instrument_id for i in instruments)),
         market=market,
-        configuration={"sell_collection": scope},
+        configuration={"sell_collection": scope, "resume_plan": plan.model_dump(mode="json")},
         source_version=source_version(),
         component_versions={"sell_collection": "1"},
-        status=status,
-        reason=reason,
+        status=OperationalStatus.NOT_RUN,
     )
     with database.write() as repo:
         repo.create_run(run)
-        for child, refs, instrument in outcomes:
-            for ref in refs:
-                repo.attach_snapshot(run.run_id, ref)
-            repo.put_stage(
-                StageRecord(
-                    run_id=run.run_id,
-                    name="collection",
-                    instrument_id=instrument.instrument_id,
-                    status=child.status,
-                    reason=child.reason,
-                )
-            )
-    artifacts = ReportService(database, runtime.reports_dir).generate(run.run_id)
-    progress(reason)
-    return run.run_id, status, artifacts
+    return execute_plan(database, runtime, run.run_id, provider, progress=progress)

@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 from typing import Literal, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, model_validator
+from pydantic import AwareDatetime, Field, model_serializer, model_validator
 
 from stock_analyser.calendars import ResolvedHistory
 from stock_analyser.contracts import (
     AnalysisRequest,
     Contract,
     EvidenceMetadata,
+    Instrument,
     MarketContext,
     OperationalStatus,
     Text,
@@ -69,6 +70,18 @@ class StageRecord(Contract):
     status: OperationalStatus = OperationalStatus.NOT_RUN
     updated_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     reason: Text | None = None
+    # Persist request budgets and exact identity before provider I/O.
+    attempts: dict[str, int] = Field(default_factory=dict)
+    frozen_instrument: Instrument | None = None
+    cache_mode: str | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_stages(self, handler):
+        data = handler(self)
+        for name in ("attempts", "frozen_instrument", "cache_mode"):
+            if not getattr(self, name):
+                data.pop(name, None)
+        return data
 
 
 class SnapshotReference(Contract):

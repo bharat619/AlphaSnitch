@@ -82,7 +82,19 @@ def run_buy(runtime, sector, input_path=None, fixture=None):
     try:
         database.initialize()
         run_id, status, artifacts = collect_buy(
-            database, runtime, snapshot, provider, history_resolver=resolver, progress=display
+            database,
+            runtime,
+            snapshot,
+            provider,
+            history_resolver=resolver,
+            progress=display,
+            provider_spec={
+                "kind": "fixture",
+                "scenario": fixture,
+                "failure_symbols": [provider.failure_symbol] if provider.failure_symbol else [],
+            }
+            if fixture
+            else None,
         )
         display(f"Run: {run_id}; collection: {status.value}; report saved")
         for artifact in artifacts:
@@ -90,6 +102,26 @@ def run_buy(runtime, sector, input_path=None, fixture=None):
         return status
     finally:
         database.close()
+
+
+@scan_app.command("resume")
+def scan_resume(ctx: typer.Context, run_id: UUID) -> None:
+    """Finish persisted collection against its original immutable inputs."""
+    from stock_analyser.resume import execute_plan
+
+    database = report_database(ctx.obj)
+    try:
+        database.initialize()
+        _, status, artifacts = execute_plan(database, ctx.obj, run_id, progress=display)
+        display(f"Run: {run_id}; collection: {status.value}; report saved")
+        for artifact in artifacts:
+            display(f"{artifact.name}: {artifact.reference}")
+    except Exception as exc:
+        fail(exc)
+    finally:
+        database.close()
+    if status.value != "SUCCEEDED":
+        raise typer.Exit(1)
 
 
 @scan_app.command("buy")
@@ -154,7 +186,19 @@ def run_sell(runtime, input_path=None, fixture=None):
     try:
         database.initialize()
         run_id, status, artifacts = collect_sell(
-            database, runtime, evidence, provider, history_resolver=resolver, progress=display
+            database,
+            runtime,
+            evidence,
+            provider,
+            history_resolver=resolver,
+            progress=display,
+            provider_spec={
+                "kind": "fixture",
+                "scenario": "valid" if fixture == "valid" else "provider-failure",
+                "failure_symbols": [],
+            }
+            if fixture
+            else None,
         )
         display(f"Run: {run_id}; collection: {status.value}; report saved")
         for artifact in artifacts:
