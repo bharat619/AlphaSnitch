@@ -2488,6 +2488,9 @@ def test_sell_scan_freezes_revision_and_shared_provider(database, tmp_path, monk
     changed = False
 
     class ObservedProvider(RawFixtureProvider):
+        def collection_identity(self):
+            return {"version": "observed-fixture-1", "scenario": "valid"}
+
         def fetch(self, instrument, market, resolution):
             nonlocal active, peak, changed
             with gate:
@@ -2595,9 +2598,434 @@ def test_sell_retains_holding_without_supported_collection_context(database, tmp
         RawFixtureProvider(),
         history_resolver=resolver,
     )
-    assert status == OperationalStatus.PARTIAL
+    # No holding has usable collection: this is a total operational failure.
+    assert status == OperationalStatus.FAILED
     report = json.loads(ReportService(database, tmp_path / "reports").show(run_id, "report.json"))
     assert report["instruments"][0]["quote_currency"] == "CAD"
     assert report["instruments"][0]["venue"] == "OTC"
     assert report["collection_stages"][0]["status"] == "FAILED"
     assert portfolio_state(database) == before
+
+
+def test_resume_sell_after_two_instruments_preserves_original_inputs(
+    database, tmp_path, monkeypatch
+):
+    """Restart after cancellation; only the two unfinished holdings make requests."""
+    from collections import Counter
+
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.ledger import portfolio_state, record_execution
+    from stock_analyser.reports import ReportService
+    from stock_analyser.resume import execute_plan
+    from stock_analyser.sell import SellEvidence, collect_sell
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs", eligible_count=4)
+    instruments = list(
+        {
+            r.metadata.instrument.instrument_id: r.metadata.instrument for r in request.histories
+        }.values()
+    )[:4]
+    for instrument in instruments:
+        with database.write() as repo:
+            repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
+            repo.put_instrument(instrument)
+        record_execution(database, ledger_trade(instrument))
+    runtime = load_runtime(data_dir=tmp_path)
+    runtime = runtime.model_copy(update={"stock_concurrency": 1})
+    evidence = SellEvidence(
+        market=request.market,
+        requested_as_of=request.requested_as_of,
+        history=request.policy.requirements(),
+        cutoff_policy=request.cutoff_policy,
+    )
+    original_portfolio = portfolio_state(database)
+
+    def interrupt(message):
+        if message.startswith("Collection 2/"):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        collect_sell(
+            database,
+            runtime,
+            evidence,
+            RawFixtureProvider(),
+            history_resolver=resolver,
+            progress=interrupt,
+        )
+    with database.read() as repo:
+        run = next(r for r in repo.list_runs(100) if "resume_plan" in r.configuration)
+        stages = repo.list_stages(run.run_id)
+        preserved = repo.list_snapshots(run.run_id)
+        run_count = len(repo.list_runs(100))
+    assert run.status == OperationalStatus.CANCELLED
+    assert sum(s.status == OperationalStatus.SUCCEEDED for s in stages) == 2
+    assert len(preserved) == 2
+    service = ReportService(database, runtime.reports_dir)
+    cancelled = service.freeze(run.run_id)
+    assert cancelled.report.stages.verdict == OperationalStatus.NOT_RUN
+    assert "Unfinished collection: 2" in service.show(run.run_id)
+    previous_reports = {
+        a.reference: Path(a.reference).read_bytes() for a in service.generate(run.run_id)
+    }
+    original_bytes = {r.reference: Path(r.reference).read_bytes() for r in preserved}
+    assert portfolio_state(database) == original_portfolio
+
+    # The ledger and current instrument projection can change while the app is down.
+    # Neither is a new input to this run.
+    record_execution(database, ledger_trade(instruments[0], quantity="1"))
+    with database.write() as repo:
+        repo.put_instrument(instruments[-1].model_copy(update={"symbol": "RENAMED"}))
+    after_external_trade = portfolio_state(database)
+    calls = Counter()
+    observations = []
+
+    original_fetch = RawFixtureProvider.fetch
+
+    def observed_fetch(self, instrument, market, resolution):
+        calls[instrument.instrument_id] += 1
+        observations.append((instrument, market, resolution))
+        return original_fetch(self, instrument, market, resolution)
+
+    monkeypatch.setattr(RawFixtureProvider, "fetch", observed_fetch)
+
+    # A new Database object discards every in-memory collector/provider object.
+    restarted = Database(database.engine.url.render_as_string(hide_password=False))
+    try:
+        result = execute_plan(restarted, runtime, run.run_id)
+        assert result[0] == run.run_id and result[1] == OperationalStatus.SUCCEEDED
+        with restarted.read() as repo:
+            resumed = repo.get_run(run.run_id)
+            snapshots = repo.list_snapshots(run.run_id)
+            assert len(repo.list_runs(100)) == run_count
+        assert len(calls) == 2 and sum(calls.values()) == 2
+        assert not set(calls) & {r.metadata.instrument.instrument_id for r in preserved}
+        assert len(snapshots) == 4
+        assert resumed.request == run.request
+        assert resumed.source_version == run.source_version
+        assert resumed.component_versions == run.component_versions
+        assert resumed.configuration["resume_plan"] == run.configuration["resume_plan"]
+        assert (
+            resumed.configuration["sell_collection"]["holdings"]
+            == run.configuration["sell_collection"]["holdings"]
+        )
+        assert resumed.request.portfolio_revision == original_portfolio[1]
+        assert resumed.configuration["sell_collection"]["portfolio_changed"] is True
+        for instrument, market, resolution in observations:
+            assert instrument in instruments and market == evidence.market
+            assert resolution.requested_as_of == evidence.requested_as_of
+            assert resolution.policy == evidence.cutoff_policy
+        assert {r.reference: Path(r.reference).read_bytes() for r in preserved} == original_bytes
+        assert {path: Path(path).read_bytes() for path in previous_reports} == previous_reports
+        assert portfolio_state(restarted) == after_external_trade
+        completed_bytes = service.show(run.run_id)
+        completed_artifacts = service.generate(run.run_id)
+        # Completed resume is regeneration: the CLI needs no provider.
+        monkeypatch.setenv(
+            "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+        )
+        result = CliRunner().invoke(
+            app, ["--data-dir", str(tmp_path), "scan", "resume", str(run.run_id)]
+        )
+        assert result.exit_code == 0, result.output
+        assert service.show(run.run_id) == completed_bytes
+        assert service.generate(run.run_id) == completed_artifacts
+        assert portfolio_state(restarted) == after_external_trade
+        with restarted.read() as repo:
+            assert len(repo.list_runs(100)) == run_count
+    finally:
+        restarted.close()
+
+
+def test_resume_incomplete_history_budget_and_policy_identity(database, tmp_path):
+    from stock_analyser.collection import CollectionService
+    from stock_analyser.contracts import AnalysisRequest, HistoryRequirement
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs", eligible_count=1)
+    instrument = request.histories[0].metadata.instrument
+    requirements = (
+        HistoryRequirement(timeframe="daily", minimum_bars=3),
+        HistoryRequirement(timeframe="weekly", minimum_bars=2),
+    )
+    plans = tuple(
+        resolver.resolve(request.market, instrument.venue, h, request.requested_as_of)
+        for h in requirements
+    )
+    run = RunRecord(
+        run_id=uuid4(),
+        request=AnalysisRequest(
+            request_id=uuid4(),
+            mode="buy",
+            market_id="US",
+            instrument_ids=(instrument.instrument_id,),
+            requested_as_of=request.requested_as_of,
+            strategy_version="collection-only-1",
+            history=requirements,
+        ),
+        market=request.market,
+        configuration={},
+        source_version={"original": "commit"},
+        component_versions={"collection": "1"},
+        history_resolutions=plans,
+    )
+    with database.write() as repo:
+        repo.put_security(Security(security_id=instrument.security_id, name=instrument.symbol))
+        repo.put_instrument(instrument)
+        repo.create_run(run)
+    calls = []
+
+    class InterruptedProvider(RawFixtureProvider):
+        def fetch(self, instrument, market, resolution):
+            calls.append(resolution.requirement.timeframe)
+            if resolution.requirement.timeframe == "weekly":
+                raise KeyboardInterrupt
+            return super().fetch(instrument, market, resolution)
+
+    collector = CollectionService(database, tmp_path / "snapshots")
+    with pytest.raises(KeyboardInterrupt):
+        collector.collect(run.run_id, instrument, InterruptedProvider())
+    with database.read() as repo:
+        snapshot = repo.list_snapshots(run.run_id)[0]
+        assert repo.get_run(run.run_id).status == OperationalStatus.CANCELLED
+        assert repo.list_stages(run.run_id)[0].attempts == {"daily": 1, "weekly": 1}
+    with pytest.raises(ValueError, match="new run"):
+        collector.collect(
+            run.run_id, instrument, RawFixtureProvider(), cache_mode="refresh", resume=True
+        )
+    with pytest.raises(ValueError, match="new run"):
+        collector.collect(
+            run.run_id,
+            instrument.model_copy(update={"symbol": "CHANGED"}),
+            RawFixtureProvider(),
+            resume=True,
+        )
+    for _ in range(2):
+        with pytest.raises(KeyboardInterrupt):
+            collector.collect(run.run_id, instrument, InterruptedProvider(), resume=True)
+    with pytest.raises(ValueError, match="retry budget"):
+        collector.collect(run.run_id, instrument, InterruptedProvider(), resume=True)
+    assert calls == ["daily", "weekly", "weekly", "weekly"]
+    with database.read() as repo:
+        assert repo.list_snapshots(run.run_id) == (snapshot,)
+        assert repo.get_run(run.run_id).request == run.request
+        assert repo.get_run(run.run_id).status == OperationalStatus.FAILED
+        assert repo.list_stages(run.run_id)[0].attempts == {"daily": 1, "weekly": 3}
+
+
+def test_resume_reuses_completed_timeframe_and_excludes_parallel_collectors(
+    database, tmp_path, monkeypatch
+):
+    from stock_analyser.collection import CollectionService
+    from stock_analyser.fixtures import RawFixtureProvider
+
+    output = collect_report(database, tmp_path, monkeypatch)
+    run_id = UUID(output["run_id"])
+    with database.read() as repo:
+        run = repo.get_run(run_id)
+        stage = repo.list_stages(run_id)[0]
+        snapshots = repo.list_snapshots(run_id)
+    collector = CollectionService(database, tmp_path / "snapshots")
+
+    class NeverFetch:
+        def fetch(self, *args):
+            raise AssertionError("Completed evidence must not be recollected")
+
+    with database.collection_lock(run_id):
+        with pytest.raises(ValueError, match="already active"):
+            collector.collect(run_id, stage.frozen_instrument, RawFixtureProvider(), resume=True)
+    collector.collect(run_id, stage.frozen_instrument, NeverFetch(), resume=True)
+    with database.read() as repo:
+        assert repo.get_run(run_id) == run
+        assert repo.list_snapshots(run_id) == snapshots
+
+
+def test_resume_buy_frozen_evidence_and_new_policy_create_new_runs(database, tmp_path):
+    from stock_analyser.buy import FrozenPriceProvider, collect_buy
+    from stock_analyser.config import load_runtime
+    from stock_analyser.resume import execute_plan
+    from stock_analyser.universe import SelectionPolicy, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "original", eligible_count=4)
+    snapshot = select_universe(request, resolver)
+    runtime = load_runtime(data_dir=tmp_path).model_copy(update={"stock_concurrency": 1})
+
+    def interrupt(message):
+        if message.startswith("Collection 2/"):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        collect_buy(
+            database,
+            runtime,
+            snapshot,
+            FrozenPriceProvider(request.histories),
+            history_resolver=resolver,
+            progress=interrupt,
+        )
+    with database.read() as repo:
+        parent = next(r for r in repo.list_runs(100) if "resume_plan" in r.configuration)
+        old_refs = repo.list_snapshots(parent.run_id)
+        original_children = parent.configuration["buy_collection"]["child_run_ids"]
+    # Replacement histories or a different adapter must be rejected before any
+    # report retirement, attempt increment, evidence attachment, or status write.
+    with database.read() as repo:
+        before_runs = repo.list_runs(100)
+        before_state = tuple(
+            (
+                r.run_id,
+                repo.list_stages(r.run_id),
+                repo.list_snapshots(r.run_id),
+                repo.list_artifacts(r.run_id),
+            )
+            for r in before_runs
+        )
+        before_report = repo.get_report_input(parent.run_id)
+    before_files = {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    from stock_analyser.fixtures import RawFixtureProvider
+
+    for replacement in (FrozenPriceProvider(request.histories[1:]), RawFixtureProvider()):
+        with pytest.raises(ValueError, match="requires a new run"):
+            execute_plan(database, runtime, parent.run_id, replacement)
+    with database.read() as repo:
+        assert repo.list_runs(100) == before_runs
+        assert (
+            tuple(
+                (
+                    r.run_id,
+                    repo.list_stages(r.run_id),
+                    repo.list_snapshots(r.run_id),
+                    repo.list_artifacts(r.run_id),
+                )
+                for r in before_runs
+            )
+            == before_state
+        )
+        assert repo.get_report_input(parent.run_id) == before_report
+    assert {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before_files
+    # No input filename, universe re-selection, calendar re-resolution or provider
+    # construction is needed after restart: only the persisted plan is read.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stock_analyser",
+            "--data-dir",
+            str(tmp_path),
+            "scan",
+            "resume",
+            str(parent.run_id),
+        ],
+        env={
+            **os.environ,
+            "STOCK_ANALYSER_DATABASE_URL": database.engine.url.render_as_string(
+                hide_password=False
+            ),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # The synthetic benchmark has no frozen input and is honestly FAILED. All
+    # selected stocks are complete and do not become strategy recommendations.
+    assert result.returncode == 1, result.stdout + result.stderr
+    with database.read() as repo:
+        resumed = repo.get_run(parent.run_id)
+        stages = repo.list_stages(parent.run_id)
+        refs = repo.list_snapshots(parent.run_id)
+    assert resumed.status == OperationalStatus.PARTIAL
+    assert all(s.status == OperationalStatus.SUCCEEDED for s in stages)
+    assert len(refs) == 4
+    assert all(r in refs for r in old_refs)
+    assert resumed.request == parent.request
+    assert resumed.configuration["buy_collection"]["child_run_ids"] == original_children
+    assert resumed.configuration["resume_plan"] == parent.configuration["resume_plan"]
+    # A changed selection policy starts a separate scan rather than editing an
+    # interrupted/completed snapshot in place.
+    new_request = request.model_copy(update={"policy": SelectionPolicy(minimum_price_usd=100)})
+    new_snapshot = select_universe(new_request, resolver)
+    fresh_id, _, _ = collect_buy(
+        database,
+        runtime,
+        new_snapshot,
+        FrozenPriceProvider(new_request.histories),
+        history_resolver=resolver,
+    )
+    assert fresh_id != parent.run_id
+    with database.read() as repo:
+        assert repo.get_run(parent.run_id) == resumed
+        assert repo.list_snapshots(parent.run_id) == refs
+        assert (
+            repo.get_run(fresh_id).configuration["buy_collection"]["policy_version"]
+            == new_request.policy.version
+        )
+    # An exhausted benchmark cannot be retried indefinitely across invocations.
+    execute_plan(database, runtime, parent.run_id)
+    execute_plan(database, runtime, parent.run_id)
+    with database.read() as repo:
+        context_id = UUID(parent.configuration["buy_collection"]["shared_context"][0]["run_id"])
+        context_stage = repo.list_stages(context_id)[0]
+        assert context_stage.attempts == {"daily": 3}
+        assert "budget exhausted" in context_stage.reason
+
+
+def test_resume_external_provider_requires_original_configuration(database, tmp_path):
+    from stock_analyser.buy import collect_buy
+    from stock_analyser.config import load_runtime
+    from stock_analyser.fixtures import RawFixtureProvider
+    from stock_analyser.resume import execute_plan, provider_recipe
+    from stock_analyser.universe import select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    class ExternalProvider(RawFixtureProvider):
+        def __init__(self, revision):
+            super().__init__()
+            self.revision = revision
+
+        def collection_identity(self):
+            return {"adapter_version": "1", "data_revision": self.revision, "scenario": "valid"}
+
+    with pytest.raises(ValueError, match="collection_identity"):
+        provider_recipe(object())
+    database.initialize()
+    request, resolver = fixture_request(tmp_path / "inputs", eligible_count=1)
+    runtime = load_runtime(data_dir=tmp_path).model_copy(update={"stock_concurrency": 1})
+
+    def interrupt(message):
+        if message.startswith("Collection 1/"):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        collect_buy(
+            database,
+            runtime,
+            select_universe(request, resolver),
+            ExternalProvider("v1"),
+            history_resolver=resolver,
+            progress=interrupt,
+        )
+    with database.read() as repo:
+        run = next(r for r in repo.list_runs(100) if "resume_plan" in r.configuration)
+        artifacts = repo.list_artifacts(run.run_id)
+        stages = repo.list_stages(run.run_id)
+        snapshots = repo.list_snapshots(run.run_id)
+        report = repo.get_report_input(run.run_id)
+    assert run.configuration["resume_plan"]["provider"]["configuration"]["data_revision"] == "v1"
+    for provider in (ExternalProvider("v2"), None):
+        with pytest.raises(ValueError, match="new run|original identified"):
+            execute_plan(database, runtime, run.run_id, provider)
+    with database.read() as repo:
+        assert repo.get_run(run.run_id) == run
+        assert repo.list_artifacts(run.run_id) == artifacts
+        assert repo.list_stages(run.run_id) == stages
+        assert repo.list_snapshots(run.run_id) == snapshots
+        assert repo.get_report_input(run.run_id) == report
+    _, status, _ = execute_plan(database, runtime, run.run_id, ExternalProvider("v1"))
+    assert status == OperationalStatus.SUCCEEDED

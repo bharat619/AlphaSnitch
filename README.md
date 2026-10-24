@@ -741,3 +741,42 @@ nonzero after saving a report. Empty portfolios save an `EMPTY_PORTFOLIO` report
 A completion revision check discloses any portfolio change since selection; later
 changes do not rewrite frozen reports. Scans write evidence and reports only.
 SELL/HOLD verdicts and automatic portfolio mutation remain unrun.
+
+
+### Resume interrupted buy and sell collection
+
+New `scan buy` and `scan sell` runs save their run ID and complete collection plan
+before requesting evidence. After Ctrl-C or a process interruption, restart with:
+
+```sh
+stock-analyser scan resume <run-id>
+```
+
+Resume uses the original ordered instruments, universe snapshot or portfolio
+revision, instrument identities, resolved history/cutoff, provider routing and
+configuration versions. It does not reselect from the current universe or ledger.
+Frozen input references and their hashes are retained in the plan; keep their
+source files available. Fixture plans can also be resumed without the old CLI
+arguments. Custom Python provider adapters must be supplied again to
+`stock_analyser.resume.execute_plan`, with the same adapter class and non-secret,
+JSON-serializable configuration returned by `collection_identity()`. That identity
+must include every version, input reference/hash and request policy that affects
+evidence. Missing or changed adapter identities require a fresh scan. Built-in
+frozen and fixture adapters are restored exclusively from the saved recipe;
+caller-supplied replacements must match it and are never executed.
+
+Each completed immutable history is verified and reused, including histories
+completed before an instrument was interrupted. Only incomplete history requests
+are retried, with at most three attempts per instrument/timeframe across all
+restarts (provider adapters also enforce their own bounded transport retries).
+A changed cutoff, policy, input data, or requested refresh requires a fresh scan
+and run ID. Resume accepts no replacement input or cutoff arguments.
+
+Cancellation saves a provisional report with unfinished instruments and an
+operational `CANCELLED` status. Partial and total collection failures remain
+separate from strategy verdicts, which stay `NOT_RUN`. On resume, provisional
+report files remain available at their previous paths and a later report revision
+is published. Completed successful resumes only regenerate the existing report;
+`report regenerate <run-id>` also works offline without recollection. Collection
+and regeneration never add holdings, trades or duplicate analysis runs. Legacy
+runs without a saved collection plan require a new scan.

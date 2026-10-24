@@ -1,7 +1,6 @@
 """Bounded sector collection from explicitly supplied prototype universe evidence."""
 
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 from threading import Lock
@@ -9,7 +8,7 @@ from uuid import uuid4
 
 from stock_analyser.cache import load_snapshot
 from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
-from stock_analyser.collection import CollectionService, RawPriceResponse, encode, validate_prices
+from stock_analyser.collection import RawPriceResponse, encode, validate_prices
 from stock_analyser.contracts import (
     AnalysisRequest,
     Instrument,
@@ -18,8 +17,7 @@ from stock_analyser.contracts import (
     SourceRecord,
     SymbolMapping,
 )
-from stock_analyser.persistence.records import RunRecord, StageRecord
-from stock_analyser.reports import ReportService
+from stock_analyser.persistence.records import RunRecord
 from stock_analyser.universe import save_universe
 from stock_analyser.version import source_version
 
@@ -104,7 +102,14 @@ class SharedProvider:
 
 
 def collect_buy(
-    database, runtime, snapshot, provider, *, history_resolver=None, progress=lambda message: None
+    database,
+    runtime,
+    snapshot,
+    provider,
+    *,
+    history_resolver=None,
+    progress=lambda message: None,
+    provider_spec=None,
 ):
     """Collect each selected listing, retain every outcome, and publish one report."""
     save_universe(database, runtime.snapshots_dir, snapshot)
@@ -116,7 +121,6 @@ def collect_buy(
     # AnalysisRequest permits one price basis per timeframe; refuse ambiguous inputs.
     if len({h.timeframe for h in history}) != len(history):
         raise ValueError("Buy collection requires one price basis per timeframe")
-    provider = SharedProvider(provider)
     progress(
         f"Market: {market.market_id}; cutoff: {request.requested_as_of.isoformat()}; "
         f"currency: {market.currency}; policy: {request.policy.version}"
@@ -164,24 +168,10 @@ def collect_buy(
             repo.create_run(run)
         return run
 
+    from stock_analyser.resume import CollectionJob, ResumePlan, execute_plan, provider_recipe
+
     reusable_context = {}
-
-    def collect(run, instrument):
-        if instrument.instrument_id in reusable_context:
-            return reusable_context[instrument.instrument_id]
-        try:
-            CollectionService(database, runtime.snapshots_dir).collect(
-                run.run_id, instrument, provider
-            )
-        except Exception:
-            with database.read() as repo:
-                if repo.get_run(run.run_id).status != OperationalStatus.FAILED:
-                    raise
-        with database.read() as repo:
-            return repo.get_run(run.run_id), repo.list_snapshots(run.run_id)
-
-    # Benchmark/context is independent of stock workers and collected once per mapping.
-    shared = []
+    shared, context_jobs = [], []
     if selected:
         for mapping in market.benchmarks:
             instrument = next(
@@ -203,7 +193,6 @@ def collect_buy(
                             "snapshots": [],
                         }
                     )
-                    progress(f"Shared context {mapping.key}: FAILED (frozen input absent)")
                     continue
                 instrument = Instrument(
                     instrument_id=uuid4(),
@@ -220,30 +209,39 @@ def collect_buy(
                         ),
                     ),
                 )
-            if instrument.instrument_id in reusable_context:
-                run, refs = reusable_context[instrument.instrument_id]
-            else:
-                run, refs = collect(make_run(instrument, benchmark=True), instrument)
-            reusable_context[instrument.instrument_id] = (run, refs)
+            if instrument.instrument_id not in reusable_context:
+                child = make_run(instrument, benchmark=True)
+                reusable_context[instrument.instrument_id] = child
+                context_jobs.append(CollectionJob(run_id=child.run_id, instrument=instrument))
+            child = reusable_context[instrument.instrument_id]
             shared.append(
                 {
                     "key": mapping.key,
-                    "run_id": str(run.run_id),
+                    "run_id": str(child.run_id),
                     "instrument_id": str(instrument.instrument_id),
-                    "status": run.status.value,
-                    "snapshots": [r.model_dump(mode="json") for r in refs],
+                    "status": "NOT_RUN",
+                    "snapshots": [],
                 }
             )
-            progress(f"Shared context {mapping.key}: {run.status.value}")
     children = [
         (
-            reusable_context[i.instrument_id][0]
+            reusable_context[i.instrument_id]
             if i.instrument_id in reusable_context
             else make_run(i),
             i,
         )
         for i in selected
     ]
+    jobs = context_jobs + [
+        CollectionJob(run_id=child.run_id, instrument=i)
+        for child, i in children
+        if i.instrument_id not in reusable_context
+    ]
+    plan = ResumePlan(
+        jobs=tuple(jobs),
+        provider=provider_spec or provider_recipe(provider),
+        stock_concurrency=runtime.stock_concurrency,
+    )
     run = RunRecord(
         run_id=uuid4(),
         request=AnalysisRequest(
@@ -259,6 +257,7 @@ def collect_buy(
         market=market,
         history_resolutions=plans,
         configuration={
+            "resume_plan": plan.model_dump(mode="json"),
             "buy_collection": {
                 "sector": "technology",
                 "policy_version": request.policy.version,
@@ -276,7 +275,7 @@ def collect_buy(
                 "stock_concurrency": runtime.stock_concurrency,
                 "shared_context": shared,
                 "child_run_ids": [str(r.run_id) for r, _ in children],
-            }
+            },
         },
         source_version=source_version(),
         component_versions={"buy_collection": "1"},
@@ -284,46 +283,10 @@ def collect_buy(
     )
     with database.write() as repo:
         repo.create_run(run)
-    failures = 0
-    with ThreadPoolExecutor(max_workers=runtime.stock_concurrency) as executor:
-        pending = {executor.submit(collect, child, i): i for child, i in children}
-        for completed, future in enumerate(as_completed(pending), 1):
-            child, refs = future.result()
-            instrument = pending[future]
-            failures += child.status != OperationalStatus.SUCCEEDED
-            with database.write() as repo:
-                for ref in refs:
-                    repo.attach_snapshot(run.run_id, ref)
-                repo.put_stage(
-                    StageRecord(
-                        run_id=run.run_id,
-                        name="collection",
-                        instrument_id=instrument.instrument_id,
-                        status=child.status,
-                        reason=child.reason,
-                    )
-                )
-            progress(
-                f"Collection {completed}/{len(selected)}: {instrument.symbol} {child.status.value}"
-            )
-    context_failures = sum(c["status"] != "SUCCEEDED" for c in shared)
-    status = (
-        OperationalStatus.PARTIAL if failures or context_failures else OperationalStatus.SUCCEEDED
+    return execute_plan(
+        database,
+        runtime,
+        run.run_id,
+        provider if plan.provider["kind"] == "external" else None,
+        progress=progress,
     )
-    reason = (
-        "NO_ELIGIBLE_STOCKS; "
-        if not selected
-        else f"FEWER_THAN_TEN ({len(selected)}); "
-        if len(selected) < 10
-        else ""
-    )
-    reason += f"{failures} stock collection failures; " if failures else ""
-    reason += f"{context_failures} shared context failures; " if context_failures else ""
-    reason += (
-        "Prototype collection only; incomplete sector coverage; "
-        "full-sector top-ten scan not completed"
-    )
-    with database.write() as repo:
-        repo.set_run_status(run.run_id, status, reason)
-    artifacts = ReportService(database, runtime.reports_dir).generate(run.run_id)
-    return run.run_id, status, artifacts

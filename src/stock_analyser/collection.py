@@ -179,61 +179,90 @@ def validate_prices(
     return tuple(bars), tuple(findings), len(rows)
 
 
+class CollectionRetryExhausted(ValueError):
+    """The persisted request budget is exhausted; evidence policy needs a new run."""
+
+
 class CollectionService:
     def __init__(self, database: Database, snapshots_dir: Path, *, cache=None):
         self.database = database
         self.snapshots_dir = snapshots_dir.resolve()
         self.cache = cache
 
-    def collect(
+    def _collect_locked(
         self,
         run_id: UUID,
         instrument: Instrument,
         provider: RawPriceProvider | None,
         *,
         cache_mode: Literal["reuse", "refresh", "replay", "off"] = "reuse",
+        resume: bool = False,
     ) -> tuple[EvidencePacket, ...]:
         with self.database.write() as repo:
             run = repo.get_run(run_id)
             if run.request.instrument_ids != (instrument.instrument_id,):
                 raise ValueError("Collection requires a one-instrument run")
             run.market.validate_instrument(instrument)
-            if run.status != OperationalStatus.NOT_RUN or repo.list_snapshots(run_id):
+            stages = [s for s in repo.list_stages(run_id) if s.name == "collection"]
+            previous = stages[0] if stages else None
+            if (
+                run.status != OperationalStatus.NOT_RUN or repo.list_snapshots(run_id)
+            ) and not resume:
                 raise ValueError("Collection already started; create a new run for new evidence")
-            repo.set_run_status(run_id, OperationalStatus.RUNNING)
-            repo.put_stage(
-                StageRecord(
-                    run_id=run_id,
-                    name="collection",
-                    instrument_id=instrument.instrument_id,
-                    status=OperationalStatus.RUNNING,
-                )
+            if previous and (
+                previous.frozen_instrument != instrument or previous.cache_mode != cache_mode
+            ):
+                raise ValueError("Changed identity or evidence policy requires a new run")
+            stage = StageRecord(
+                run_id=run_id,
+                name="collection",
+                instrument_id=instrument.instrument_id,
+                status=OperationalStatus.RUNNING,
+                frozen_instrument=instrument,
+                cache_mode=cache_mode,
+                attempts=previous.attempts if previous else {},
             )
+            if resume and run.status == OperationalStatus.SUCCEEDED:
+                return self._saved_packets(repo.list_snapshots(run_id))
+            if resume:
+                repo.reset_unfinished_report(run_id)
+            repo.set_run_status(run_id, OperationalStatus.RUNNING)
+            repo.put_stage(stage)
         try:
             if cache_mode not in ("reuse", "refresh", "replay", "off"):
                 raise ValueError("Unknown cache mode")
             if cache_mode == "replay" and self.cache is None:
                 raise ValueError("Replay requires an evidence cache")
             return self._collect(run, instrument, provider, cache_mode)
-        except Exception:
-            # Do not put raw provider errors (which may contain credentials) into state.
+        except BaseException as exc:
+            cancelled = isinstance(exc, (KeyboardInterrupt, SystemExit))
+            status = OperationalStatus.CANCELLED if cancelled else OperationalStatus.FAILED
             reason = (
-                run.price_routing.reason
+                "Collection cancelled; unfinished work can be resumed against frozen inputs"
+                if cancelled
+                else "Collection retry budget exhausted; unfinished work requires a new run"
+                if isinstance(exc, CollectionRetryExhausted)
+                else run.price_routing.reason
                 if run.price_routing is not None and run.price_routing.route is None
-                else "Collection could not finish; inspect retained evidence and retry in a new run"
+                else "Collection could not finish; resume retained evidence with bounded retries"
             )
             with self.database.write() as repo:
-                repo.put_stage(
-                    StageRecord(
-                        run_id=run_id,
-                        name="collection",
-                        instrument_id=instrument.instrument_id,
-                        status=OperationalStatus.FAILED,
-                        reason=reason,
-                    )
-                )
-                repo.set_run_status(run_id, OperationalStatus.FAILED, reason)
+                stage = next(s for s in repo.list_stages(run_id) if s.name == "collection")
+                repo.put_stage(stage.model_copy(update={"status": status, "reason": reason}))
+                repo.set_run_status(run_id, status, reason)
             raise
+
+    def collect(self, run_id, instrument, provider, *, cache_mode="reuse", resume=False):
+        with self.database.collection_lock(run_id):
+            return self._collect_locked(
+                run_id, instrument, provider, cache_mode=cache_mode, resume=resume
+            )
+
+    @staticmethod
+    def _saved_packets(references):
+        from stock_analyser.cache import load_snapshot
+
+        return tuple(load_snapshot(reference) for reference in references)
 
     def _collect(
         self,
@@ -243,7 +272,8 @@ class CollectionService:
         cache_mode: str,
     ) -> tuple[EvidencePacket, ...]:
         run_id = run.run_id
-        snapshots = []
+        with self.database.read() as repo:
+            snapshots = list(self._saved_packets(repo.list_snapshots(run_id)))
         rejected_responses = []
         if run.price_routing is not None and run.price_routing.route is None:
             raise ValueError(run.price_routing.reason)
@@ -252,6 +282,8 @@ class CollectionService:
         )
         for resolution in run.history_resolutions:
             if resolution.venue != instrument.venue:
+                continue
+            if any(p.resolution == resolution for p in snapshots):
                 continue
             if not resolution.periods:
                 raise ValueError("Collection requires a resolved history window")
@@ -265,6 +297,16 @@ class CollectionService:
                         repo.attach_snapshot(run_id, reference)
                     snapshots.append(packet)
                     continue
+            with self.database.write() as repo:
+                stage = next(s for s in repo.list_stages(run_id) if s.name == "collection")
+                key = resolution.requirement.timeframe
+                attempts = dict(stage.attempts)
+                if attempts.get(key, 0) >= 3:
+                    raise CollectionRetryExhausted(
+                        "Collection retry budget exhausted; start a new run"
+                    )
+                attempts[key] = attempts.get(key, 0) + 1
+                repo.put_stage(stage.model_copy(update={"attempts": attempts}))
             if provider is None:
                 raise ValueError("Collection requires a provider on a cache miss")
             if cache:
@@ -394,7 +436,12 @@ class CollectionService:
         reason = (
             None if status == OperationalStatus.SUCCEEDED else "Mandatory evidence failed quality"
         )
-        manifest_path = self.snapshots_dir / "runs" / str(run_id) / "manifest.json"
+        with self.database.read() as repo:
+            stage = next(s for s in repo.list_stages(run_id) if s.name == "collection")
+        attempt = sum(stage.attempts.values())
+        manifest_path = (
+            self.snapshots_dir / "runs" / str(run_id) / f"{attempt}-{uuid4()}" / "manifest.json"
+        )
         content = encode(
             {
                 "frozen_run": run.model_dump(mode="json"),
@@ -417,14 +464,6 @@ class CollectionService:
                     saved_at=datetime.now(UTC),
                 )
             )
-            repo.put_stage(
-                StageRecord(
-                    run_id=run_id,
-                    name="collection",
-                    instrument_id=instrument.instrument_id,
-                    status=status,
-                    reason=reason,
-                )
-            )
+            repo.put_stage(stage.model_copy(update={"status": status, "reason": reason}))
             repo.set_run_status(run_id, status, reason)
         return tuple(snapshots)

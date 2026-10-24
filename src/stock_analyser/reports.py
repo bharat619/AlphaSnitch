@@ -379,14 +379,29 @@ class ReportService:
                     i.instrument_id: i
                     for i in (Instrument.model_validate(h["instrument"]) for h in sell["holdings"])
                 }
+            resume_plan = run.configuration.get("resume_plan")
+            if resume_plan:
+                instruments = {
+                    i.instrument_id: i
+                    for i in (
+                        Instrument.model_validate(job["instrument"]) for job in resume_plan["jobs"]
+                    )
+                    if i.instrument_id in run.request.instrument_ids
+                }
             artifacts = repo.list_artifacts(run_id)
             research = repo.research_for_report(run)
         packets, issues = [], []
+        completed = {s.instrument_id for s in stages if s.status == OperationalStatus.SUCCEEDED}
+        unfinished = set(run.request.instrument_ids) - completed
+        if unfinished and "resume_plan" in run.configuration:
+            issues.append(
+                f"Unfinished collection: {len(unfinished)} instruments; no strategy verdict"
+            )
         for snapshot in snapshots:
             try:
-                packet = EvidencePacket.model_validate_json(
-                    verified_bytes(snapshot.reference, snapshot.sha256)
-                )
+                from stock_analyser.cache import load_snapshot
+
+                packet = load_snapshot(snapshot)
                 if packet.metadata != snapshot.metadata:
                     raise ValueError("Evidence metadata mismatch")
                 packets.append(packet)
@@ -448,6 +463,8 @@ class ReportService:
         with self.database.write() as repo:
             existing = {a.name: a for a in repo.list_artifacts(run_id)}
             directory = self.reports_dir / data.run.created_at.date().isoformat() / str(run_id)
+            if "resume_plan" in data.run.configuration:
+                directory /= data.run.updated_at.strftime("%Y%m%dT%H%M%S%f")
             if "report.md" in existing and Path(existing["report.md"].reference).is_absolute():
                 directory = Path(existing["report.md"].reference).parent
             records = [

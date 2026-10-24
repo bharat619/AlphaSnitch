@@ -28,6 +28,10 @@ class Database:
         self.engine = create_engine(
             postgres_url(url),
             pool_pre_ping=True,
+            # Sixteen collectors can each pin a session advisory lock while
+            # issuing a short transaction. Leave room for the coordinator too.
+            pool_size=5,
+            max_overflow=35,
             hide_parameters=True,
             connect_args={"connect_timeout": 5},
         )
@@ -61,3 +65,18 @@ class Database:
             cfg.attributes["connection"] = repositories.connection
             command.upgrade(cfg, "head")
             repositories.put_market(US_MARKET)
+
+    @contextmanager
+    def collection_lock(self, run_id):
+        """A session lock excludes concurrent collectors and dies with the process."""
+        key = int.from_bytes(run_id.bytes[:8], "big", signed=True)
+        with self.engine.connect() as connection:
+            acquired = connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
+            connection.commit()
+            if not acquired:
+                raise ValueError("Collection is already active for this run")
+            try:
+                yield
+            finally:
+                connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                connection.commit()

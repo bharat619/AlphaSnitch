@@ -259,6 +259,32 @@ class Repositories:
             raise ValueError("Report research differs from persisted evidence")
         self._immutable(s.report_inputs, {"run_id": report_input.run_id}, report_input)
 
+    def reset_unfinished_report(self, run_id: UUID) -> None:
+        """Retire a provisional report before resuming; its published files remain intact."""
+        if self.get_run(run_id).status == OperationalStatus.SUCCEEDED:
+            raise ValueError("Completed reports cannot be reopened for collection")
+        self.connection.execute(s.report_inputs.delete().where(s.report_inputs.c.run_id == run_id))
+        self.connection.execute(s.artifacts.delete().where(s.artifacts.c.run_id == run_id))
+
+    def set_collection_outcome(self, run_id: UUID, scope: dict) -> None:
+        """Update only derived display outcomes, never the frozen resume plan or policy."""
+        run = self.get_run(run_id)
+        configuration = dict(run.configuration)
+        for name, fields in scope.items():
+            allowed = {
+                "buy_collection": {"shared_context"},
+                "sell_collection": {"observed_revision", "portfolio_changed"},
+            }
+            if name not in allowed or not set(fields) <= allowed[name]:
+                raise ValueError("Cannot change frozen collection policy")
+            configuration[name] = {**configuration[name], **fields}
+        record = run.model_copy(update={"configuration": configuration})
+        self.connection.execute(
+            s.runs.update()
+            .where(s.runs.c.run_id == run_id)
+            .values(payload=record.model_dump(mode="json"))
+        )
+
     def set_run_status(
         self,
         run_id: UUID,
