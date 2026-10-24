@@ -82,7 +82,7 @@ def run_buy(runtime, sector, input_path=None, fixture=None):
     try:
         database.initialize()
         run_id, status, artifacts = collect_buy(
-            database, runtime, snapshot, provider, progress=display
+            database, runtime, snapshot, provider, history_resolver=resolver, progress=display
         )
         display(f"Run: {run_id}; collection: {status.value}; report saved")
         for artifact in artifacts:

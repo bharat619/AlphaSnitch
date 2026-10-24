@@ -272,8 +272,15 @@ class CollectionService:
                     identity, instrument, run.market, resolution, provider
                 )
             else:
-                response = provider.fetch(instrument, run.market, resolution)
-                retained_sources, lineage = (), {}
+                fetch_with_sources = getattr(provider, "fetch_with_sources", None)
+                if fetch_with_sources:
+                    response, retained_sources = fetch_with_sources(
+                        instrument, run.market, resolution
+                    )
+                else:
+                    response = provider.fetch(instrument, run.market, resolution)
+                    retained_sources = ()
+                lineage = {}
             snapshot_id = uuid4()
             directory = self.snapshots_dir / str(snapshot_id)
             raw_path = directory / "source.json"

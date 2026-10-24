@@ -1,5 +1,6 @@
 """Bounded sector collection from explicitly supplied prototype universe evidence."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
@@ -7,12 +8,14 @@ from threading import Lock
 from uuid import uuid4
 
 from stock_analyser.cache import load_snapshot
-from stock_analyser.collection import CollectionService, RawPriceResponse
+from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
+from stock_analyser.collection import CollectionService, RawPriceResponse, encode, validate_prices
 from stock_analyser.contracts import (
     AnalysisRequest,
     Instrument,
     OperationalStatus,
     Security,
+    SourceRecord,
     SymbolMapping,
 )
 from stock_analyser.persistence.records import RunRecord, StageRecord
@@ -28,6 +31,9 @@ class FrozenPriceProvider:
         self.histories = histories
 
     def fetch(self, instrument, market, resolution):
+        return self.fetch_with_sources(instrument, market, resolution)[0]
+
+    def fetch_with_sources(self, instrument, market, resolution):
         for reference in self.histories:
             meta = reference.metadata
             if (
@@ -36,9 +42,43 @@ class FrozenPriceProvider:
                 and meta.adjustment == resolution.requirement.adjustment
             ):
                 packet = load_snapshot(reference)
-                return RawPriceResponse(
+                if meta.market != market:
+                    raise ValueError(
+                        "Frozen price evidence belongs to another market configuration"
+                    )
+                response = RawPriceResponse(
                     **packet.response, payload=Path(packet.raw_reference).read_bytes()
                 )
+                if packet.resolution.periods != resolution.periods:
+                    original = {p.session_end: p for p in packet.resolution.periods}
+                    if any(original.get(p.session_end) != p for p in resolution.periods):
+                        raise ValueError("Frozen evidence does not cover the requested periods")
+                    _, findings, _ = validate_prices(response, packet.resolution)
+                    if any(f.severity == "error" for f in findings):
+                        raise ValueError("Cannot project invalid frozen price evidence")
+                    payload = json.loads(response.payload, parse_float=str)
+                    sessions = {p.session_end.isoformat() for p in resolution.periods}
+                    payload["bars"] = [r for r in payload["bars"] if r["session"] in sessions]
+                    payload["frozen_projection"] = {
+                        "snapshot_id": str(meta.snapshot_id),
+                        "manifest": reference.reference,
+                        "manifest_sha256": reference.sha256,
+                    }
+                    response = response.model_copy(update={"payload": encode(payload)})
+                # Keep the original immutable manifest and raw source chain beside
+                # the derived response; projecting rows never relabels original bytes.
+                sources = meta.sources + (
+                    SourceRecord(
+                        provider=response.provider,
+                        provider_symbol=response.provider_symbol,
+                        retrieved_at=response.retrieved_at,
+                        reference=reference.reference,
+                        sha256=reference.sha256,
+                        session_start=packet.resolution.history_start,
+                        session_end=packet.resolution.session_date,
+                    ),
+                )
+                return response, sources
         raise ValueError("No frozen price evidence supplied")
 
 
@@ -57,8 +97,15 @@ class SharedProvider:
         with self.lock:
             return self.provider.fetch(*args)
 
+    def fetch_with_sources(self, *args):
+        with self.lock:
+            fetch = getattr(self.provider, "fetch_with_sources", None)
+            return fetch(*args) if fetch else (self.provider.fetch(*args), ())
 
-def collect_buy(database, runtime, snapshot, provider, *, progress=lambda message: None):
+
+def collect_buy(
+    database, runtime, snapshot, provider, *, history_resolver=None, progress=lambda message: None
+):
     """Collect each selected listing, retain every outcome, and publish one report."""
     save_universe(database, runtime.snapshots_dir, snapshot)
     selected = snapshot.result.selected
@@ -79,7 +126,16 @@ def collect_buy(database, runtime, snapshot, provider, *, progress=lambda messag
     )
     progress(f"Selected instruments ({len(selected)}): " + ", ".join(i.symbol for i in selected))
 
-    def make_run(instrument):
+    def make_run(instrument, *, benchmark=False):
+        resolutions = tuple(p for p in plans if p.venue == instrument.venue)
+        if benchmark:
+            resolver = history_resolver or HistoryResolver(
+                ExchangeCalendarAdapter(), request.cutoff_policy
+            )
+            resolutions = tuple(
+                resolver.resolve(market, instrument.venue, h, request.requested_as_of)
+                for h in history
+            )
         run = RunRecord(
             run_id=uuid4(),
             request=AnalysisRequest(
@@ -95,7 +151,7 @@ def collect_buy(database, runtime, snapshot, provider, *, progress=lambda messag
             configuration={"universe_snapshot_id": str(snapshot.snapshot_id)},
             source_version=source_version(),
             component_versions={"buy_collection": "1"},
-            history_resolutions=tuple(p for p in plans if p.venue == instrument.venue),
+            history_resolutions=resolutions,
         )
         with database.write() as repo:
             try:
@@ -167,7 +223,7 @@ def collect_buy(database, runtime, snapshot, provider, *, progress=lambda messag
             if instrument.instrument_id in reusable_context:
                 run, refs = reusable_context[instrument.instrument_id]
             else:
-                run, refs = collect(make_run(instrument), instrument)
+                run, refs = collect(make_run(instrument, benchmark=True), instrument)
             reusable_context[instrument.instrument_id] = (run, refs)
             shared.append(
                 {

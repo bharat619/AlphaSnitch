@@ -1747,3 +1747,146 @@ def test_buy_cli_frozen_input_discloses_missing_benchmark(database, tmp_path, mo
     assert run.status == OperationalStatus.PARTIAL
     assert run.configuration["buy_collection"]["shared_context"][0]["status"] == "FAILED"
     assert "shared context failures" in run.reason
+
+
+@pytest.mark.parametrize(("retained_bars", "benchmark_venue"), [(300, "XNAS"), (260, "ARCX")])
+def test_buy_cli_frozen_superset_and_independent_benchmark(
+    database, tmp_path, monkeypatch, retained_bars, benchmark_venue
+):
+    from stock_analyser.cache import load_snapshot
+    from stock_analyser.collection import CollectionService
+    from stock_analyser.contracts import AnalysisRequest, CalendarReference, HistoryRequirement
+    from stock_analyser.fixtures import RawFixtureProvider, fixture_market
+    from stock_analyser.reports import ReportService
+    from stock_analyser.universe import SelectionPolicy, select_universe
+    from stock_analyser.universe_demo import fixture_request
+
+    market = fixture_market("US", "USD", "XNAS", "America/New_York")
+    if benchmark_venue != "XNAS":
+        venues = ("XNAS", benchmark_venue)
+        market = market.model_copy(
+            update={
+                "calendars": market.calendars
+                + (
+                    CalendarReference(
+                        venue=benchmark_venue, reference="fixture-us", version="synthetic-1"
+                    ),
+                ),
+                "routes": tuple(
+                    r.model_copy(update={"feed": r.feed.model_copy(update={"venues": venues})})
+                    for r in market.routes
+                ),
+                "benchmarks": tuple(
+                    b.model_copy(update={"venue": benchmark_venue}) for b in market.benchmarks
+                ),
+            }
+        )
+    monkeypatch.setattr("stock_analyser.universe_demo.fixture_market", lambda *args: market)
+    request, resolver = fixture_request(
+        tmp_path / "frozen",
+        eligible_count=3,
+        policy=SelectionPolicy(minimum_daily_bars=retained_bars),
+    )
+    # Frozen evidence can be longer than the current selection/collection policy.
+    request = request.model_copy(update={"policy": SelectionPolicy()})
+    requirement = HistoryRequirement(
+        timeframe="daily", minimum_bars=retained_bars, adjustment="raw"
+    )
+    benchmark = request.histories[0].metadata.instrument.model_copy(
+        update={
+            "instrument_id": uuid4(),
+            "security_id": uuid4(),
+            "symbol": "INDEX",
+            "venue": benchmark_venue,
+            "provider_symbols": (
+                SymbolMapping(
+                    provider="fixture-us", symbol="INDEX", effective_from=date(2020, 1, 1)
+                ),
+            ),
+        }
+    )
+    benchmark_plan = resolver.resolve(market, benchmark_venue, requirement, request.requested_as_of)
+    benchmark_run = RunRecord(
+        run_id=uuid4(),
+        request=AnalysisRequest(
+            request_id=uuid4(),
+            mode="buy",
+            market_id="US",
+            instrument_ids=(benchmark.instrument_id,),
+            requested_as_of=request.requested_as_of,
+            strategy_version="synthetic-1",
+            history=(requirement,),
+        ),
+        market=market,
+        configuration={},
+        source_version={},
+        component_versions={},
+        history_resolutions=(benchmark_plan,),
+    )
+    database.initialize()
+    with database.write() as repo:
+        repo.put_security(Security(security_id=benchmark.security_id, name="Synthetic benchmark"))
+        repo.put_instrument(benchmark)
+        repo.create_run(benchmark_run)
+    CollectionService(database, tmp_path / "original").collect(
+        benchmark_run.run_id, benchmark, RawFixtureProvider()
+    )
+    with database.read() as repo:
+        benchmark_refs = repo.list_snapshots(benchmark_run.run_id)
+    request = request.model_copy(update={"histories": request.histories + benchmark_refs})
+    before = select_universe(request, resolver)
+    assert {p.venue for p in before.resolutions} == {"XNAS"}
+    original_hashes = {r.reference: r.sha256 for r in request.histories}
+    input_path = tmp_path / "selection.json"
+    input_path.write_text(request.model_dump_json())
+    monkeypatch.setattr(
+        "stock_analyser.calendars.ExchangeCalendarAdapter", lambda: resolver.calendar
+    )
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "--data-dir",
+            str(tmp_path),
+            "scan",
+            "buy",
+            "--sector",
+            "technology",
+            "--input",
+            str(input_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    with database.read() as repo:
+        parent = next(r for r in repo.list_runs(100) if "buy_collection" in r.configuration)
+        snapshots = repo.list_snapshots(parent.run_id)
+        scope = parent.configuration["buy_collection"]
+        context = scope["shared_context"][0]
+        collected_benchmark = repo.get_run(UUID(context["run_id"]))
+        frozen = repo.get_universe(UUID(scope["universe_snapshot_id"]))
+    assert parent.status == OperationalStatus.SUCCEEDED
+    assert len(snapshots) == 3
+    assert all(r.metadata.returned_bars == 260 for r in snapshots)
+    assert all(r.metadata.availability.value == "AVAILABLE" for r in snapshots)
+    assert context["status"] == "SUCCEEDED"
+    assert collected_benchmark.history_resolutions[0].venue == benchmark_venue
+    assert collected_benchmark.history_resolutions[0].requested_as_of == request.requested_as_of
+    assert collected_benchmark.history_resolutions[0].policy == request.cutoff_policy
+    assert frozen == before  # Benchmark resolution never mutates sector selection inputs/plans.
+    for reference in request.histories:
+        load_snapshot(reference)
+        assert reference.sha256 == original_hashes[reference.reference]
+    if retained_bars > 260:
+        for reference in snapshots:
+            packet = load_snapshot(reference)
+            projection = json.loads(Path(packet.raw_reference).read_bytes())["frozen_projection"]
+            assert projection["manifest_sha256"] == original_hashes[projection["manifest"]]
+            assert any(s.reference == projection["manifest"] for s in packet.metadata.sources)
+            assert not packet.findings
+    report = json.loads(
+        ReportService(database, tmp_path / "reports").show(parent.run_id, "report.json")
+    )
+    assert all(s["status"] == "SUCCEEDED" for s in report["collection_stages"])
+    assert report["report"]["stages"]["verdict"] == "NOT_RUN"
