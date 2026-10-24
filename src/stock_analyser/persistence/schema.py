@@ -136,3 +136,13 @@ executions = sa.Table(
     sa.Column("idempotency_key", sa.Text, nullable=False, unique=True),
     sa.Column("payload", JSONB, nullable=False),
 )
+
+ledger_events = sa.Table(
+    "ledger_events",
+    metadata,
+    sa.Column("sequence", sa.BigInteger, sa.Identity(), primary_key=True),
+    sa.Column("event_id", sa.Uuid, nullable=False, unique=True),
+    sa.Column("instrument_id", sa.Uuid, sa.ForeignKey("instruments.instrument_id"), nullable=False),
+    sa.Column("idempotency_key", sa.Text, nullable=False, unique=True),
+    sa.Column("payload", JSONB, nullable=False),
+)

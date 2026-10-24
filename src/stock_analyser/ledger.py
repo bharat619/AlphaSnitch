@@ -5,6 +5,8 @@ Proportional fee allocation uses 80-digit arithmetic; final closes consume the
 remaining basis exactly. Unknown FX propagates an unavailable accounting result.
 """
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from decimal import Decimal, localcontext
 from typing import Annotated, Literal
@@ -93,12 +95,14 @@ class Position(Contract):
     realized_pnl: Decimal | None
     accounting_complete: bool
     lots: tuple[Lot, ...]
+    reconciliation_required: tuple[UUID, ...] = ()
 
 
 class ExecutionReceipt(Contract):
     execution_id: UUID
     confirmation: TradeConfirmation
     position: Position
+    portfolio_revision: str | None = None
 
 
 def _fees(trade):
@@ -113,15 +117,28 @@ def _fees(trade):
     return total
 
 
-def fifo(trades: list[tuple[UUID, TradeConfirmation]]) -> Position:
+def fifo(
+    trades: list[tuple[UUID, TradeConfirmation]],
+    splits: list[tuple[UUID, "CorporateAction"]] | None = None,
+    template: TradeConfirmation | None = None,
+) -> Position:
     """Replay all executions; reject any negative holding, including backdated sales."""
-    if not trades:
+    if not trades and template is None:
         raise ValueError("No executions")
+    template = template or trades[0][1]
     lots = []
     realized = Decimal(0)
     with localcontext() as context:
         context.prec = 80
-        for execution_id, trade in sorted(trades, key=lambda item: item[1].executed_at):
+        # A split takes effect before executions at the same timestamp.
+        timeline = [(t.executed_at, 1, eid, t) for eid, t in trades]
+        timeline += [(a.effective_at, 0, eid, a) for eid, a in (splits or [])]
+        for _, kind, execution_id, trade in sorted(timeline, key=lambda item: item[:2]):
+            if kind == 0:
+                lots = [
+                    lot.model_copy(update={"quantity": lot.quantity * trade.ratio}) for lot in lots
+                ]
+                continue
             fees = _fees(trade)
             if trade.side == "BUY":
                 basis = None if fees is None else trade.quantity * trade.price + fees
@@ -163,9 +180,9 @@ def fifo(trades: list[tuple[UUID, TradeConfirmation]]) -> Position:
             else sum((lot.cost_basis for lot in lots), Decimal(0))
         )
         return Position(
-            instrument_id=trade.instrument_id,
-            venue=trade.venue,
-            currency=trade.currency,
+            instrument_id=template.instrument_id,
+            venue=template.venue,
+            currency=template.currency,
             quantity=sum((lot.quantity for lot in lots), Decimal(0)),
             cost_basis=basis,
             realized_pnl=realized,
@@ -199,14 +216,22 @@ def record_execution(database, confirmation: TradeConfirmation) -> ExecutionRece
         validate_instrument(confirmation, instrument)
         execution_id = uuid4()
         history = _history(repo.connection, confirmation.instrument_id)
-        position = fifo(
-            [
-                *((r.execution_id, r.confirmation) for r in history),
-                (execution_id, confirmation),
-            ]
-        )
+        events = _events(repo.connection)
+        projected = [
+            *history,
+            ExecutionReceipt(
+                execution_id=execution_id,
+                confirmation=confirmation,
+                position=_empty_position(confirmation),
+            ),
+        ]
+        position = _replay(projected, events)
+        revision = _revision(_history(repo.connection), events, execution_id)
         receipt = ExecutionReceipt(
-            execution_id=execution_id, confirmation=confirmation, position=position
+            execution_id=execution_id,
+            confirmation=confirmation,
+            position=position,
+            portfolio_revision=revision,
         )
         repo.connection.execute(
             sa.insert(s.executions).values(
@@ -232,14 +257,20 @@ def validate_instrument(confirmation, instrument: Instrument):
                 raise ValueError(f"Execution {name} must be a multiple of {increment}")
 
 
-def portfolio(database) -> list[Position]:
+def portfolio_state(database) -> tuple[list[Position], str]:
+    """Read positions and their revision from one consistent database snapshot."""
     with database.read() as repo:
+        repo.connection.execution_options(isolation_level="REPEATABLE READ")
+        history = _history(repo.connection)
         grouped = {}
-        for receipt in _history(repo.connection):
-            grouped.setdefault(receipt.confirmation.instrument_id, []).append(
-                (receipt.execution_id, receipt.confirmation)
-            )
-        return [fifo(trades) for trades in grouped.values()]
+        for receipt in history:
+            grouped.setdefault(receipt.confirmation.instrument_id, []).append(receipt)
+        events = _events(repo.connection)
+        return ([_replay(rows, events) for rows in grouped.values()], _revision(history, events))
+
+
+def portfolio(database) -> list[Position]:
+    return portfolio_state(database)[0]
 
 
 def execution_receipt(database, key: str) -> ExecutionReceipt:
@@ -250,3 +281,165 @@ def execution_receipt(database, key: str) -> ExecutionReceipt:
         if payload is None:
             raise LookupError("Execution receipt not found")
         return ExecutionReceipt.model_validate(payload)
+
+
+class Correction(Contract):
+    target_execution_id: UUID
+    # None reverses the execution. A replacement retains the original execution ID.
+    replacement: TradeConfirmation | None = None
+    reason: Text
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=200, pattern=r"\S")]
+
+
+class CorporateAction(Contract):
+    instrument_id: UUID
+    kind: Literal["SPLIT", "MERGER", "SPIN_OFF", "AMBIGUOUS"]
+    effective_at: AwareDatetime
+    reason: Text
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=200, pattern=r"\S")]
+    ratio: Positive | None = None
+
+    @model_validator(mode="after")
+    def valid_action(self):
+        if self.effective_at > datetime.now(UTC):
+            raise ValueError("Action timestamp cannot be in the future")
+        if (self.kind == "SPLIT") != (self.ratio is not None):
+            raise ValueError("Only a split requires an explicit new-shares/old-shares ratio")
+        return self
+
+
+class LedgerEventReceipt(Contract):
+    event_id: UUID
+    recorded_at: AwareDatetime
+    operation: Correction | CorporateAction
+    previous_correction_id: UUID | None = None
+    status: Literal["APPLIED", "RECONCILIATION_REQUIRED"]
+    portfolio_revision: str
+    position: Position | None
+
+
+def _events(connection):
+    return [
+        LedgerEventReceipt.model_validate(payload)
+        for payload in connection.scalars(
+            sa.select(s.ledger_events.c.payload).order_by(s.ledger_events.c.sequence)
+        )
+    ]
+
+
+def _revision(history, events, extra_id=None):
+    value = {
+        "executions": [str(r.execution_id) for r in history]
+        + ([str(extra_id)] if extra_id else []),
+        "events": [str(e.event_id) for e in events],
+    }
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def portfolio_revision(database):
+    return portfolio_state(database)[1]
+
+
+def _empty_position(trade):
+    return Position(
+        instrument_id=trade.instrument_id,
+        venue=trade.venue,
+        currency=trade.currency,
+        quantity=Decimal(0),
+        cost_basis=Decimal(0),
+        realized_pnl=Decimal(0),
+        accounting_complete=True,
+        lots=(),
+    )
+
+
+def _replay(history, events):
+    active = {r.execution_id: r.confirmation for r in history}
+    instrument_id = history[0].confirmation.instrument_id
+    splits, unresolved = [], []
+    for event in events:
+        operation = event.operation
+        if isinstance(operation, Correction) and operation.target_execution_id in active:
+            active[operation.target_execution_id] = operation.replacement
+        elif isinstance(operation, CorporateAction) and operation.instrument_id == instrument_id:
+            if operation.kind == "SPLIT":
+                splits.append((event.event_id, operation))
+            else:
+                unresolved.append(event.event_id)
+    position = fifo(
+        [(eid, t) for eid, t in active.items() if t is not None],
+        splits,
+        template=history[0].confirmation,
+    )
+    return position.model_copy(update={"reconciliation_required": tuple(unresolved)})
+
+
+def record_ledger_event(database, operation: Correction | CorporateAction) -> LedgerEventReceipt:
+    """Append atomically; replay never rewrites execution receipts or reports."""
+    operation = type(operation).model_validate(operation.model_dump(mode="json"))
+    with database.write() as repo:
+        events = _events(repo.connection)
+        for event in events:
+            if event.operation.idempotency_key == operation.idempotency_key:
+                if event.operation != operation:
+                    raise ValueError("Idempotency key already used for a different ledger event")
+                return event
+        history = _history(repo.connection)
+        previous_id = None
+        if isinstance(operation, Correction):
+            target = next(
+                (r for r in history if r.execution_id == operation.target_execution_id), None
+            )
+            if target is None:
+                raise LookupError("Target execution not found")
+            instrument_id = target.confirmation.instrument_id
+            if operation.replacement is not None:
+                if operation.replacement.instrument_id != instrument_id:
+                    raise ValueError("Correction cannot change instrument")
+                validate_instrument(operation.replacement, repo.get_instrument(instrument_id))
+            previous_id = next(
+                (
+                    e.event_id
+                    for e in reversed(events)
+                    if isinstance(e.operation, Correction)
+                    and e.operation.target_execution_id == operation.target_execution_id
+                ),
+                None,
+            )
+        else:
+            instrument_id = operation.instrument_id
+            repo.get_instrument(instrument_id)
+        affected = [r for r in history if r.confirmation.instrument_id == instrument_id]
+        event_id = uuid4()
+        receipt = LedgerEventReceipt(
+            event_id=event_id,
+            recorded_at=datetime.now(UTC),
+            operation=operation,
+            previous_correction_id=previous_id,
+            status="RECONCILIATION_REQUIRED"
+            if isinstance(operation, CorporateAction) and operation.kind != "SPLIT"
+            else "APPLIED",
+            portfolio_revision="pending",
+            position=None,
+        )
+        projected = [*events, receipt]
+        position = _replay(affected, projected) if affected else None
+        receipt = receipt.model_copy(
+            update={"position": position, "portfolio_revision": _revision(history, projected)}
+        )
+        repo.connection.execute(
+            sa.insert(s.ledger_events).values(
+                event_id=event_id,
+                instrument_id=instrument_id,
+                idempotency_key=operation.idempotency_key,
+                payload=receipt.model_dump(mode="json"),
+            )
+        )
+        return receipt
+
+
+def ledger_history(database) -> list[ExecutionReceipt | LedgerEventReceipt]:
+    """Original execution receipts followed by append-only corrective/action receipts."""
+    with database.read() as repo:
+        repo.connection.execution_options(isolation_level="REPEATABLE READ")
+        return [*_history(repo.connection), *_events(repo.connection)]

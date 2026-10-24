@@ -639,7 +639,7 @@ Use decimal strings for all quantities, prices, fees and FX rates. Supported pre
 is 28 digits total and eight decimal places; instrument `quantity_increment` and
 `price_increment` profiles impose additional increment constraints (both default to
 0.00000001). Currency and venue must match the stored listing. Timestamps require
-an offset and cannot be in the future. No correction/reversal UI is provided yet.
+an offset and cannot be in the future. Corrections and actions use the commands below.
 
 FIFO orders fills by execution timestamp, with ledger insertion order breaking ties.
 Backdated executions are accepted only if the entire resulting history remains
@@ -653,3 +653,51 @@ FX makes affected basis/P&L null and accounting incomplete; quantities remain va
 Currency totals are never combined. Arithmetic uses 80-digit Decimal precision;
 partial-lot fees are prorated and a full close consumes the remaining basis exactly.
 This is internal portfolio bookkeeping, not tax reporting.
+
+
+## Corrections and corporate actions (US-015)
+
+`stock-analyser correct-execution --input correction.json` reviews an append-only
+correction and asks for confirmation. The JSON requires `target_execution_id`
+(from the original receipt), `reason`, and a new `idempotency_key`. Set
+`replacement` to a complete TradeConfirmation to correct the fill, or `null` to
+reverse it. Repeated corrections always target the original execution UUID; each
+receipt links the preceding correction. The latest correction supplies the active
+fill while all originals and corrective records remain visible in
+`stock-analyser ledger-history`.
+
+`stock-analyser record-corporate-action --input action.json` accepts, for example:
+
+```json
+{
+  "instrument_id": "00000000-0000-0000-0000-000000000001",
+  "kind": "SPLIT",
+  "ratio": "2",
+  "effective_at": "2026-10-23T00:00:00Z",
+  "reason": "Confirmed 2:1 split",
+  "idempotency_key": "listing-split-20261023"
+}
+```
+
+Use one stable key per real corporate action. Confirming the same payload/key twice
+returns the first receipt and applies the split once. A ratio means new shares per
+old share; it changes each open lot's quantity and implied per-share basis, retaining
+its aggregate basis. Fractional quantities remain explicit; cash-in-lieu and taxes
+require separate reconciliation. Splits precede executions at the same timestamp;
+use precise timestamps to order intraday events. Backdated changes replay all later
+fills and are rejected atomically if any sale would oversell.
+
+Kinds `MERGER`, `SPIN_OFF`, and `AMBIGUOUS` omit `ratio` and create
+`RECONCILIATION_REQUIRED` receipts and position flags without converting holdings.
+Resolve these explicitly from confirmed records; automatic complex-action
+conversion and a workflow for clearing reconciliation flags are out of scope.
+Every new receipt carries a portfolio revision; `portfolio` displays the current
+revision. Original execution receipts and saved analysis reports retain their
+recorded values after corrections.
+
+For the synthetic demonstration, run the PostgreSQL integration test
+`test_ledger_actions_demo_atomic_correction_and_immutable_receipts`: buy 10 at 100,
+apply the 2:1 split twice with one key (20 shares, basis 1000), sell 8 at 60,
+then correct the original buy to 12 at 90. Final lots contain 16 shares with basis
+720 and realized P&L 120; the correction links the original execution, reason,
+recording timestamp, and new portfolio revision.
