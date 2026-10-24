@@ -110,3 +110,12 @@ report_inputs = sa.Table(
     sa.Column("run_id", sa.Uuid, sa.ForeignKey("analysis_runs.run_id"), primary_key=True),
     sa.Column("payload", JSONB, nullable=False),
 )
+research_records = sa.Table(
+    "research_records",
+    metadata,
+    sa.Column("run_id", sa.Uuid, sa.ForeignKey("analysis_runs.run_id"), primary_key=True),
+    sa.Column(
+        "instrument_id", sa.Uuid, sa.ForeignKey("instruments.instrument_id"), primary_key=True
+    ),
+    sa.Column("payload", JSONB, nullable=False),
+)

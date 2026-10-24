@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal, Self
 from uuid import UUID, uuid4, uuid5
 
-from pydantic import model_validator
+from pydantic import model_serializer, model_validator
 
 from stock_analyser.collection import EvidencePacket, encode
 from stock_analyser.contracts import (
@@ -26,6 +26,7 @@ from stock_analyser.persistence.records import (
     SnapshotReference,
     StageRecord,
 )
+from stock_analyser.research import ResearchRecord, render_research
 from stock_analyser.security import redact_values
 
 ARTIFACT_NAMES = ("report.md", "report.json", "manifest.json")
@@ -43,7 +44,15 @@ class ReportInput(Contract):
     packets: tuple[EvidencePacket, ...]
     collection_manifest: dict[str, object] | None = None
     evidence_issues: tuple[str, ...] = ()
-    renderer_version: Literal["data-readiness-1"] = "data-readiness-1"
+    research: tuple[ResearchRecord, ...] = ()
+    renderer_version: Literal["data-readiness-1", "data-readiness-2"] = "data-readiness-2"
+
+    @model_serializer(mode="wrap")
+    def legacy_inputs(self, handler):
+        data = handler(self)
+        if self.renderer_version == "data-readiness-1":
+            data.pop("research", None)
+        return data
 
     @model_validator(mode="after")
     def consistent_run(self) -> Self:
@@ -53,6 +62,16 @@ class ReportInput(Contract):
             raise ValueError("Report differs from frozen run")
         if self.report.evidence != tuple(s.metadata for s in self.snapshots):
             raise ValueError("Report snapshot metadata differs")
+        scope = {i.instrument_id for i in self.instruments}
+        if self.renderer_version == "data-readiness-1" and self.research:
+            raise ValueError("Legacy renderer cannot contain research")
+        if any(
+            r.run_id != self.run_id
+            or r.instrument.instrument_id not in scope
+            or r.news.window_end != self.run.request.requested_as_of
+            for r in self.research
+        ):
+            raise ValueError("Report research scope differs")
         return self
 
 
@@ -202,6 +221,8 @@ def render_markdown(data: ReportInput) -> bytes:
             f"- Rejected response {diagnostic['snapshot_id']}: "
             + ", ".join(f["code"] for f in diagnostic["findings"])
         )
+    if data.renderer_version == "data-readiness-2":
+        lines.extend(render_research(data.research))
     lines.extend(["", "## Coverage limits", ""])
     lines.extend(f"- {issue}" for issue in data.evidence_issues)
     lines.extend(
@@ -252,6 +273,11 @@ def render(data: ReportInput) -> dict[str, bytes]:
             "component_versions": data.run.component_versions,
             "snapshots": [s.model_dump(mode="json") for s in data.snapshots],
             "collection_manifest": data.collection_manifest,
+            **(
+                {"research": [r.model_dump(mode="json") for r in data.research]}
+                if data.renderer_version == "data-readiness-2"
+                else {}
+            ),
             "rejected_responses": (data.collection_manifest or {}).get("rejected_responses", []),
             "files": {
                 name: {"reference": name, "sha256": hashlib.sha256(content).hexdigest()}
@@ -285,6 +311,7 @@ class ReportService:
                 if instrument_id not in instruments:
                     instruments[instrument_id] = repo.get_instrument(instrument_id)
             artifacts = repo.list_artifacts(run_id)
+            research = repo.list_research(run_id)
         packets, issues = [], []
         for snapshot in snapshots:
             try:
@@ -338,6 +365,7 @@ class ReportService:
             packets=tuple(packets),
             collection_manifest=collection_manifest,
             evidence_issues=tuple(issues),
+            research=research,
         )
         # Freeze redaction once, so later environment changes cannot change report bytes.
         data = ReportInput.model_validate(redact_values(data.model_dump(mode="json")))

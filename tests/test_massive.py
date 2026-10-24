@@ -28,6 +28,7 @@ from stock_analyser.massive import (
     MassiveSettings,
     ProviderAllowance,
 )
+from stock_analyser.massive_news import MassiveNewsProvider
 
 
 class Clock:
@@ -106,6 +107,132 @@ def row(session):
 
 def prices(rows, **extra):
     return reply({"status": "OK", "ticker": "AAPL", "adjusted": True, "results": rows, **extra})
+
+
+def news_row(identifier="one", **changes):
+    return {
+        "id": identifier,
+        "article_url": f"https://example.com/{identifier}",
+        "published_utc": "2026-10-16T12:00:00Z",
+        "tickers": ["AAPL"],
+        "title": "Do not retain headline",
+        "description": "Do not retain article summary",
+        "insights": [{"sentiment_reasoning": "Do not retain provider prose"}],
+        "unknown": "secret-do-not-retain",
+        **changes,
+    }
+
+
+def fetch_news(client):
+    return MassiveNewsProvider(client).fetch(
+        smoke_instrument("AAPL", "XNAS"), US_MARKET, datetime(2026, 10, 17, tzinfo=UTC)
+    )
+
+
+def test_news_pagination_deduplication_and_allowlisted_retention(client_factory):
+    next_url = "https://api.massive.com/v2/reference/news?cursor=opaque&apiKey=secret-do-not-retain"
+    client, calls, _ = client_factory(
+        [
+            reply({"results": [news_row()], "next_url": next_url}),
+            reply(
+                {
+                    "results": [
+                        news_row(),
+                        news_row("duplicate-url", article_url="https://example.com/one"),
+                        news_row("two", tickers=["OTHER"]),
+                    ]
+                }
+            ),
+        ]
+    )
+    result = fetch_news(client)
+    assert result.status == "COMPLETE" and result.pages == 2 and result.duplicates == 2
+    assert len(result.items) == 2
+    assert [i.ticker_associated for i in result.items] == [True, False]
+    assert all(i.relevance == "UNASSESSED" for i in result.items)
+    second = parse_qs(urlsplit(calls[1][0]).query)
+    assert second["ticker"] == ["AAPL"]
+    assert second["published_utc.lte"] == ["2026-10-17T00:00:00+00:00"]
+    assert second["limit"] == ["100"] and "apiKey" not in second
+    encoded = result.model_dump_json()
+    for forbidden in (
+        "headline",
+        "article summary",
+        "provider prose",
+        "secret-do-not-retain",
+        "opaque",
+    ):
+        assert forbidden not in encoded
+
+
+@pytest.mark.parametrize(
+    "tail,status,finding",
+    [
+        (reply({"results": []}), "COMPLETE", None),
+        (reply(status=403), "PARTIAL", "RETRIEVAL_FAILED"),
+        (reply(status=429, headers={"Retry-After": "300"}), "PARTIAL", "PROVIDER_COOLDOWN"),
+    ],
+)
+def test_news_retains_completed_pages_on_failure(client_factory, tail, status, finding):
+    client, calls, _ = client_factory(
+        [
+            reply(
+                {
+                    "results": [news_row()],
+                    "next_url": "https://api.massive.com/v2/reference/news?cursor=next",
+                }
+            ),
+            tail,
+        ]
+    )
+    result = fetch_news(client)
+    assert result.status == status and len(result.items) == 1
+    assert len(calls) == 2
+    if finding:
+        assert finding in result.findings
+    assert result.collection_stopped == (finding == "PROVIDER_COOLDOWN")
+
+
+@pytest.mark.parametrize(
+    "payload,status",
+    [
+        ({"results": []}, "EMPTY"),
+        ({"results": "bad"}, "FAILED"),
+        ({"results": [news_row(published_utc="2026-10-18T00:00:00Z")]}, "PARTIAL"),
+        ({"results": [news_row(published_utc="2026-10-16T12:00:00")]}, "PARTIAL"),
+        ({"results": [news_row(article_url="https://user:secret@example.com")]}, "PARTIAL"),
+        ({"results": [None]}, "PARTIAL"),
+    ],
+)
+def test_news_empty_and_invalid_items_are_distinct(client_factory, payload, status):
+    client, _, _ = client_factory([reply(payload)])
+    result = fetch_news(client)
+    assert result.status == status
+    assert not result.items
+    if status == "PARTIAL":
+        assert result.rejected == 1 and "INVALID_ITEMS" in result.findings
+
+
+def test_news_page_request_bounds_and_unsafe_next_url(client_factory):
+    page = {"results": [news_row()], "next_url": "https://evil.example/news?apiKey=private"}
+    client, calls, _ = client_factory([reply(page)], news_max_pages=1)
+    assert fetch_news(client).status == "TRUNCATED"
+    assert len(calls) == 1
+    client, calls, _ = client_factory([reply(page)])
+    assert fetch_news(client).status == "PARTIAL"
+    assert len(calls) == 1
+    page["next_url"] = "https://api.massive.com/v2/reference/news?cursor=next"
+    client, calls, _ = client_factory([reply(page)], max_requests=1)
+    result = fetch_news(client)
+    assert result.status == "PARTIAL" and result.items
+    assert len(calls) == 1
+
+
+def test_news_failure_without_results_is_coverage_not_absence(client_factory):
+    client, _, _ = client_factory([reply(status=403)])
+    result = fetch_news(client)
+    assert result.status == "FAILED" and result.pages == 0 and not result.items
+    assert "RETRIEVAL_FAILED" in result.findings
 
 
 def test_pages_and_retries_share_one_allowance(client_factory):

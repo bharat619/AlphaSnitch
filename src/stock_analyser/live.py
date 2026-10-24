@@ -1,6 +1,6 @@
 """Small opt-in US smoke workflow, reusing collection and offline reports."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from importlib.metadata import version
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -77,6 +77,7 @@ def collect_smoke(
     weekly_bars=2,
     massive_client_factory=None,
     cache_mode=CacheMode.REUSE,
+    news=False,
 ):
     """AAPL and the configured compatible SPY benchmark each get a saved report.
 
@@ -194,6 +195,7 @@ def collect_smoke(
                     },
                 },
                 "cache_mode": str(cache_mode),
+                "news_requested": news,
             },
             source_version=source_version(),
             component_versions={"price_collection": "2", "history_routing": "1"}
@@ -216,6 +218,45 @@ def collect_smoke(
             with database.read() as repo:
                 if repo.get_run(run.run_id).status.value != "FAILED":
                     raise
+        if news:
+            from stock_analyser.massive_news import MassiveNewsProvider
+            from stock_analyser.research import NewsCoverage, ResearchRecord
+
+            coverage = None
+            if cache_mode != CacheMode.REPLAY and not stop_remaining:
+                try:
+                    if client is None:
+                        if massive_client_factory is None:
+                            raise ValueError("News requires a configured Massive client")
+                        client = massive_client_factory()
+                    coverage = MassiveNewsProvider(client).fetch(instrument, market, requested)
+                    stop_remaining = coverage.collection_stopped
+                except Exception as exc:
+                    stop_remaining = isinstance(exc, ProviderCooldownError)
+            if coverage is None:
+                replay = cache_mode == CacheMode.REPLAY
+                coverage = NewsCoverage(
+                    provider="massive",
+                    provider_symbol=instrument.provider_symbol("massive", requested.date()),
+                    window_start=requested - timedelta(days=runtime.massive.news_lookback_days),
+                    window_end=requested,
+                    retrieved_at=datetime.now(UTC),
+                    status="NOT_REQUESTED" if replay else "FAILED",
+                    reason="Offline price replay does not retrieve news; reopen the original "
+                    "report for retained research."
+                    if replay
+                    else "News collection could not run; coverage remains unknown.",
+                    findings=("OFFLINE_REPLAY" if replay else "COLLECTION_UNAVAILABLE",),
+                    collection_stopped=stop_remaining,
+                )
+            with database.write() as repo:
+                repo.put_research(
+                    ResearchRecord(
+                        run_id=run.run_id,
+                        instrument=instrument,
+                        news=coverage,
+                    )
+                )
         reports = ReportService(database, runtime.reports_dir)
         artifacts = reports.generate(run.run_id)
         coverage_complete = has_complete_history(reports.freeze(run.run_id))

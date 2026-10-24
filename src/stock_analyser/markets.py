@@ -14,7 +14,7 @@ from stock_analyser.contracts import (
 
 US_MARKET = MarketContext(
     market_id="US",
-    configuration_version="us-1",
+    configuration_version="us-2",
     currency="USD",
     timezone="America/New_York",
     calendars=tuple(
@@ -32,10 +32,19 @@ US_MARKET = MarketContext(
             provider="yfinance",
             feed=FeedCoverage(feed_id="yfinance-us", kind="consolidated", venues=("US_ALL",)),
         ),
+        ProviderRoute(
+            role="research",
+            provider="massive",
+            feed=FeedCoverage(feed_id="massive-news", kind="discovery", venues=("US_ALL",)),
+        ),
     ),
     capabilities=(
         ProviderCapabilities(
-            provider="massive", daily_prices=True, weekly_prices=True, max_history_days=730
+            provider="massive",
+            daily_prices=True,
+            weekly_prices=True,
+            max_history_days=730,
+            news=True,
         ),
         ProviderCapabilities(provider="yfinance", daily_prices=True, weekly_prices=True),
     ),

@@ -342,3 +342,90 @@ class RawFixtureProvider:
             feed=route.feed,
             payload=encode({"bars": rows}),
         )
+
+
+def research_fixture(instrument, market, cutoff, scenario):
+    """Synthetic metadata/review decisions; no provider content or inferred earnings dates."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+
+    from stock_analyser.research import (
+        EarningsEvidence,
+        EarningsObservation,
+        NewsCoverage,
+        NewsItem,
+    )
+
+    if scenario not in (
+        "relevant",
+        "irrelevant",
+        "empty",
+        "failed",
+        "known-event",
+        "unknown-event",
+        "conflicting-event",
+    ):
+        raise ValueError("Unknown research fixture")
+    items = ()
+    if scenario in ("relevant", "irrelevant"):
+        items = (
+            NewsItem(
+                evidence_id=fixture_id(f"news:{scenario}"),
+                provider_id=f"synthetic-{scenario}",
+                source_url=f"https://example.com/synthetic/{scenario}",
+                published_at=cutoff - timedelta(hours=1),
+                retrieved_at=cutoff + timedelta(seconds=1),
+                ticker_associated=True,
+                relevance=scenario.upper(),
+                relevance_method="synthetic-review",
+                relevance_reason="Synthetic issuer operating event."
+                if scenario == "relevant"
+                else "Synthetic broad-market roundup merely mentions the ticker.",
+            ),
+        )
+    observations = []
+    if scenario in ("known-event", "conflicting-event"):
+        days = (20, 21) if scenario == "conflicting-event" else (20,)
+        for day in days:
+            stamp = datetime(2026, 10, day, 16, 30, tzinfo=ZoneInfo(market.timezone))
+            observations.append(
+                EarningsObservation(
+                    evidence_id=fixture_id(f"earnings:{day}"),
+                    source_url=f"https://example.com/synthetic/earnings/{day}",
+                    published_at=cutoff - timedelta(days=1),
+                    retrieved_at=cutoff + timedelta(seconds=1),
+                    original_date=stamp.date(),
+                    original_timestamp=stamp,
+                    original_timezone=market.timezone,
+                    exchange_timezone=market.timezone,
+                    normalized_session_date=stamp.date(),
+                    corroboration_source="https://example.org/synthetic/issuer-calendar"
+                    if day == 20
+                    else None,
+                )
+            )
+    return {
+        "news": NewsCoverage(
+            provider=market.route("research").provider,
+            provider_symbol=instrument.provider_symbol(
+                market.route("research").provider, cutoff.date()
+            ),
+            window_start=cutoff - timedelta(days=7),
+            window_end=cutoff,
+            retrieved_at=cutoff + timedelta(seconds=1),
+            status="FAILED" if scenario == "failed" else "COMPLETE" if items else "EMPTY",
+            reason="Synthetic retrieval failure; coverage unknown."
+            if scenario == "failed"
+            else "Synthetic query result; this does not establish the absence of news or risk.",
+            items=items,
+            pages=0 if scenario == "failed" else 1,
+        ),
+        "earnings": EarningsEvidence(
+            state="CONFLICTING"
+            if len(observations) > 1
+            else "KNOWN"
+            if observations
+            else "UNKNOWN",
+            observations=tuple(observations),
+        ),
+    }
