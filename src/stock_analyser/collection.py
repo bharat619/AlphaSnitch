@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, ValidationError
+from pydantic import AwareDatetime, Field, ValidationError, model_serializer
 
 from stock_analyser.calendars import ResolutionReason, ResolvedHistory
 from stock_analyser.contracts import (
@@ -66,6 +66,14 @@ class EvidencePacket(Contract):
     source_version: dict[str, object]
     component_versions: dict[str, str]
     quality_policy: Literal["price-quality-1"] = "price-quality-1"
+    cache_refresh: dict[str, object] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_packets(self, handler):
+        data = handler(self)
+        if not self.cache_refresh:
+            data.pop("cache_refresh", None)
+        return data
 
 
 def encode(value: object) -> bytes:
@@ -172,12 +180,18 @@ def validate_prices(
 
 
 class CollectionService:
-    def __init__(self, database: Database, snapshots_dir: Path):
+    def __init__(self, database: Database, snapshots_dir: Path, *, cache=None):
         self.database = database
         self.snapshots_dir = snapshots_dir.resolve()
+        self.cache = cache
 
     def collect(
-        self, run_id: UUID, instrument: Instrument, provider: RawPriceProvider
+        self,
+        run_id: UUID,
+        instrument: Instrument,
+        provider: RawPriceProvider | None,
+        *,
+        cache_mode: Literal["reuse", "refresh", "replay", "off"] = "reuse",
     ) -> tuple[EvidencePacket, ...]:
         with self.database.write() as repo:
             run = repo.get_run(run_id)
@@ -196,7 +210,11 @@ class CollectionService:
                 )
             )
         try:
-            return self._collect(run, instrument, provider)
+            if cache_mode not in ("reuse", "refresh", "replay", "off"):
+                raise ValueError("Unknown cache mode")
+            if cache_mode == "replay" and self.cache is None:
+                raise ValueError("Replay requires an evidence cache")
+            return self._collect(run, instrument, provider, cache_mode)
         except Exception:
             # Do not put raw provider errors (which may contain credentials) into state.
             reason = (
@@ -218,7 +236,11 @@ class CollectionService:
             raise
 
     def _collect(
-        self, run: RunRecord, instrument: Instrument, provider: RawPriceProvider
+        self,
+        run: RunRecord,
+        instrument: Instrument,
+        provider: RawPriceProvider | None,
+        cache_mode: str,
     ) -> tuple[EvidencePacket, ...]:
         run_id = run.run_id
         snapshots = []
@@ -233,7 +255,25 @@ class CollectionService:
                 continue
             if not resolution.periods:
                 raise ValueError("Collection requires a resolved history window")
-            response = provider.fetch(instrument, run.market, resolution)
+            cache = self.cache if cache_mode != "off" else None
+            identity = cache.identity(run, instrument, resolution, route) if cache else None
+            if cache and cache_mode in ("reuse", "replay"):
+                hit = cache.lookup(identity, resolution, cache_mode)
+                if hit:
+                    reference, packet = hit
+                    with self.database.write() as repo:
+                        repo.attach_snapshot(run_id, reference)
+                    snapshots.append(packet)
+                    continue
+            if provider is None:
+                raise ValueError("Collection requires a provider on a cache miss")
+            if cache:
+                response, retained_sources, lineage = cache.fetch(
+                    identity, instrument, run.market, resolution, provider
+                )
+            else:
+                response = provider.fetch(instrument, run.market, resolution)
+                retained_sources, lineage = (), {}
             snapshot_id = uuid4()
             directory = self.snapshots_dir / str(snapshot_id)
             raw_path = directory / "source.json"
@@ -310,7 +350,8 @@ class CollectionService:
                         session_start=resolution.history_start,
                         session_end=resolution.session_date,
                     ),
-                ),
+                )
+                + retained_sources,
                 quality_flags=tuple(dict.fromkeys(f.code for f in findings)),
                 reason="; ".join(dict.fromkeys(f.code for f in findings if f.severity == "error"))
                 or ("No returned bars" if not count else None),
@@ -324,16 +365,17 @@ class CollectionService:
                 response=response.model_dump(mode="json", exclude={"payload"}),
                 source_version=run.source_version,
                 component_versions={**run.component_versions, "collection": "1"},
+                cache_refresh=lineage,
             )
             manifest_path = directory / "manifest.json"
             manifest_hash = immutable_write(manifest_path, encode(packet.model_dump(mode="json")))
+            reference = SnapshotReference(
+                metadata=metadata, reference=str(manifest_path), sha256=manifest_hash
+            )
             with self.database.write() as repo:
-                repo.attach_snapshot(
-                    run_id,
-                    SnapshotReference(
-                        metadata=metadata, reference=str(manifest_path), sha256=manifest_hash
-                    ),
-                )
+                repo.attach_snapshot(run_id, reference)
+            if cache:
+                cache.commit(identity, reference, packet)
             snapshots.append(packet)
         required = {h.timeframe for h in run.request.history if h.mandatory}
         successful = {

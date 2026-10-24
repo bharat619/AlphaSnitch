@@ -1,8 +1,10 @@
 """Small opt-in US smoke workflow, reusing collection and offline reports."""
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
+from importlib.metadata import version
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from stock_analyser.cache import CacheMode, EvidenceCache
 from stock_analyser.calendars import CutoffPolicy, ExchangeCalendarAdapter, HistoryResolver
 from stock_analyser.collection import CollectionService
 from stock_analyser.contracts import (
@@ -74,6 +76,7 @@ def collect_smoke(
     daily_bars=3,
     weekly_bars=2,
     massive_client_factory=None,
+    cache_mode=CacheMode.REUSE,
 ):
     """AAPL and the configured compatible SPY benchmark each get a saved report.
 
@@ -86,6 +89,22 @@ def collect_smoke(
     instruments = (smoke_instrument("AAPL", "XNAS"),) + tuple(
         smoke_instrument(b.symbol, b.venue) for b in market.benchmarks
     )
+    cache = EvidenceCache(runtime.cache_dir / "evidence")
+    if cache_mode not in (CacheMode.OFF, CacheMode.REPLAY):
+        instruments = tuple(
+            Instrument.model_validate(
+                cache.metadata(
+                    {
+                        "kind": "explicit-smoke-listing",
+                        "version": "1",
+                        "instrument": instrument.model_dump(mode="json"),
+                    },
+                    lambda instrument=instrument: instrument.model_dump(mode="json"),
+                    refresh=cache_mode == CacheMode.REFRESH,
+                )
+            )
+            for instrument in instruments
+        )
     history = tuple(
         HistoryRequirement(timeframe=t, minimum_bars=n)
         for t, n in (("daily", daily_bars), ("weekly", weekly_bars))
@@ -93,7 +112,7 @@ def collect_smoke(
     resolver = HistoryResolver(
         ExchangeCalendarAdapter(),
         CutoffPolicy(
-            earliest_session=date(1990, 1, 1) if routed else requested.date() - timedelta(days=60),
+            earliest_session=date(1990, 1, 1),
             publication_timing="unverified",
         ),
     )
@@ -110,17 +129,24 @@ def collect_smoke(
 
         all_plans = tuple(p for per_instrument in plans.values() for p in per_instrument)
         selection = select_price_route(market, all_plans, runtime.price_routing)
-        if selection.route is not None and selection.route.provider == "massive" and client is None:
+        if (
+            cache_mode != CacheMode.REPLAY
+            and selection.route is not None
+            and selection.route.provider == "massive"
+            and client is None
+        ):
             if massive_client_factory is None:
                 raise ValueError("Selected Massive route requires a configured client")
             client = massive_client_factory()
         provider = (
-            YFinancePriceProvider(all_plans)
+            None
+            if cache_mode == CacheMode.REPLAY
+            else YFinancePriceProvider(all_plans)
             if selection.route is not None and selection.route.provider == "yfinance"
             else MassiveEvidenceProvider(client)
         )
     else:
-        provider = MassiveEvidenceProvider(client)
+        provider = None if cache_mode == CacheMode.REPLAY else MassiveEvidenceProvider(client)
     results = []
     for instrument in instruments:
         resolutions = plans[instrument.instrument_id]
@@ -155,6 +181,19 @@ def collect_smoke(
                 ),
                 "publication_timing": "unverified",
                 "identity_source": "explicit smoke listing; not live reference discovery",
+                "cache_parameters": {
+                    "massive": runtime.massive.model_dump(mode="json"),
+                    "yfinance": {
+                        "version": version("yfinance"),
+                        "auto_adjust": False,
+                        "back_adjust": False,
+                        "repair": False,
+                        "actions": True,
+                        "rounding": False,
+                        "prepost": False,
+                    },
+                },
+                "cache_mode": str(cache_mode),
             },
             source_version=source_version(),
             component_versions={"price_collection": "2", "history_routing": "1"}
@@ -169,8 +208,8 @@ def collect_smoke(
             repo.create_run(run)
         stop_remaining = False
         try:
-            CollectionService(database, runtime.snapshots_dir).collect(
-                run.run_id, instrument, provider
+            CollectionService(database, runtime.snapshots_dir, cache=cache).collect(
+                run.run_id, instrument, provider, cache_mode=cache_mode
             )
         except Exception as exc:
             stop_remaining = isinstance(exc, ProviderCooldownError)
