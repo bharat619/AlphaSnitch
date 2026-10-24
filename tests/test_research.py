@@ -115,6 +115,31 @@ def test_public_urls_keep_article_identity_and_drop_credentials():
             source_url(value)
 
 
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "key",
+        "apiKey",
+        "API_KEY",
+        "api-key",
+        "access_token",
+        "authToken",
+        "refresh-token",
+        "token",
+        "password",
+        "client_secret",
+        "authorization",
+        "signature",
+        "X-Amz-Credential",
+        "X-Amz-Signature",
+        "X-Amz-Security-Token",
+    ],
+)
+def test_source_url_removes_credentials_without_removing_article_parameters(credential):
+    public = "https://example.com/news?storyKey=one&keyword=markets&signatureId=two"
+    assert source_url(f"{public}&{credential}=private&utm_source=tracker#fragment") == public
+
+
 def test_news_contract_rejects_content_and_false_completeness():
     item = dict(
         evidence_id=uuid4(),

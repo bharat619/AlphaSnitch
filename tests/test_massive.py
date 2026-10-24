@@ -165,6 +165,38 @@ def test_news_pagination_deduplication_and_allowlisted_retention(client_factory)
         assert forbidden not in encoded
 
 
+def test_news_deduplication_preserves_distinct_story_keys(client_factory):
+    client, _, _ = client_factory(
+        [
+            reply(
+                {
+                    "results": [
+                        news_row(
+                            "one",
+                            article_url="https://example.com/news?storyKey=one&apiKey=private",
+                        ),
+                        news_row(
+                            "two", article_url="https://example.com/news?storyKey=two&token=private"
+                        ),
+                        news_row(
+                            "same-story",
+                            article_url="https://example.com/news?storyKey=one&utm_source=x",
+                        ),
+                    ]
+                }
+            ),
+        ]
+    )
+    result = fetch_news(client)
+    assert result.status == "COMPLETE"
+    assert [item.source_url for item in result.items] == [
+        "https://example.com/news?storyKey=one",
+        "https://example.com/news?storyKey=two",
+    ]
+    assert result.duplicates == 1
+    assert "private" not in result.model_dump_json()
+
+
 @pytest.mark.parametrize(
     "tail,status,finding",
     [

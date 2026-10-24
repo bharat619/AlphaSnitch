@@ -712,10 +712,14 @@ def test_research_survives_report_write_failure(database, tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("cooldown", [False, True])
-def test_news_uses_massive_after_yfinance_prices(database, tmp_path, monkeypatch, cooldown):
+@pytest.mark.parametrize("price_failure", [False, True])
+def test_news_uses_massive_after_yfinance_prices(
+    database, tmp_path, monkeypatch, cooldown, price_failure
+):
     from pydantic import SecretStr
 
     from stock_analyser.config import load_runtime
+    from stock_analyser.contracts import DataReadinessReport
     from stock_analyser.fixtures import RawFixtureProvider
     from stock_analyser.live import collect_smoke
     from stock_analyser.massive import (
@@ -724,12 +728,15 @@ def test_news_uses_massive_after_yfinance_prices(database, tmp_path, monkeypatch
         MassiveSettings,
         ProviderAllowance,
     )
+    from stock_analyser.reports import ReportInput, ReportService
 
     class Prices:
         def __init__(self, plans):
             pass
 
         def fetch(self, instrument, market, resolution):
+            if price_failure:
+                raise OSError("Synthetic price failure")
             response = RawFixtureProvider().fetch(instrument, market, resolution)
             return response.model_copy(
                 update={
@@ -750,6 +757,36 @@ def test_news_uses_massive_after_yfinance_prices(database, tmp_path, monkeypatch
     def transport(target, key, timeout):
         calls.append(target)
         assert target.startswith("/v2/reference/news?")
+        # Deterministically interleave a separate report reader while news is fetching,
+        # after price collection has already finished (including publication-unverified
+        # history and provider failures, both of which can mark the price run FAILED).
+        with database.read() as repo:
+            pending = repo.list_runs()[0]
+            instrument = repo.get_instrument(pending.request.instrument_ids[0])
+            assert pending.status in (OperationalStatus.SUCCEEDED, OperationalStatus.FAILED)
+            assert not repo.list_research(pending.run_id)
+        reports = ReportService(database, runtime.reports_dir)
+        with pytest.raises(ValueError, match="saved research"):
+            reports.generate(pending.run_id)
+        # The serialized write boundary must also reject callers bypassing ReportService.
+        premature = ReportInput(
+            run_id=pending.run_id,
+            run=pending,
+            report=DataReadinessReport(
+                run_id=pending.run_id, request=pending.request, status=pending.status
+            ),
+            instruments=(instrument,),
+            collection_stages=(),
+            snapshots=(),
+            packets=(),
+        )
+        with pytest.raises(ValueError, match="saved research"):
+            with database.write() as repo:
+                repo.put_report_input(premature)
+        with database.read() as repo:
+            with pytest.raises(LookupError):
+                repo.get_report_input(pending.run_id)
+            assert all(a.name == "manifest.json" for a in repo.list_artifacts(pending.run_id))
         if cooldown:
             return HttpResponse(429, {"Retry-After": "300"}, b"{}")
         return HttpResponse(
@@ -793,12 +830,21 @@ def test_news_uses_massive_after_yfinance_prices(database, tmp_path, monkeypatch
     assert len(factory_calls) == 1
     assert len(results) == len(calls) == (1 if cooldown else 2)
     for result in results:
-        assert result["history_complete"]
+        assert result["history_complete"] == (not price_failure)
         data = json.loads(Path(result["report_json"]).read_bytes())
         assert data["run"]["price_routing"]["route"]["provider"] == "yfinance"
         assert data["research"][0]["news"]["provider"] == "massive"
         assert data["research"][0]["news"]["status"] == ("FAILED" if cooldown else "COMPLETE")
         assert result["collection_stopped"] == cooldown
+        service = ReportService(database, runtime.reports_dir)
+        run_id = UUID(result["run_id"])
+        frozen = service.freeze(run_id)
+        assert len(frozen.research) == 1
+        if not cooldown:
+            assert frozen.research[0].news.items[0].provider_id == "one"
+        saved = Path(result["report_json"]).read_bytes()
+        service.generate(run_id)
+        assert Path(result["report_json"]).read_bytes() == saved
 
 
 def test_cache_replay_correction_and_unchanged_report_inputs(database, tmp_path, monkeypatch):

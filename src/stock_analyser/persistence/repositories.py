@@ -216,6 +216,18 @@ class Repositories:
         )
         return tuple(ResearchRecord.model_validate(value) for value in values)
 
+    def research_for_report(self, run: RunRecord):
+        records = self.list_research(run.run_id)
+        if run.configuration.get("news_requested") and not set(run.request.instrument_ids) <= {
+            record.instrument.instrument_id for record in records
+        }:
+            # Price collection can finish before news. An immutable coverage record,
+            # including FAILED/NOT_REQUESTED, is the research completion boundary.
+            raise ValueError(
+                "Reporting requires saved research coverage for every requested instrument"
+            )
+        return records
+
     def put_report_input(self, report_input) -> None:
         from stock_analyser.reports import ReportInput
         from stock_analyser.security import redact_values
@@ -228,7 +240,7 @@ class Repositories:
             raise ValueError("Report input differs from persisted run")
         if report_input.research != tuple(
             type(record).model_validate(redact_values(record.model_dump(mode="json")))
-            for record in self.list_research(report_input.run_id)
+            for record in self.research_for_report(frozen_run)
         ):
             raise ValueError("Report research differs from persisted evidence")
         self._immutable(s.report_inputs, {"run_id": report_input.run_id}, report_input)

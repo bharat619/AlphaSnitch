@@ -4,7 +4,6 @@ No article bodies, provider summaries, sentiment prose, or model calls belong he
 News association and material relevance are independent facts.
 """
 
-import re
 from datetime import date
 from typing import Literal, Self
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -24,6 +23,34 @@ EARNINGS_FOLLOW_UP = (
     "retrieval times, original timezones and exchange-local dates, and resolve disagreements."
 )
 
+# Match complete parameter names after case/separator normalization. Substring
+# matching would erase article identifiers such as storyKey or signatureId.
+_CREDENTIAL_PARAMETERS = frozenset(
+    {
+        "key",
+        "apikey",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+        "idtoken",
+        "authtoken",
+        "auth",
+        "authorization",
+        "password",
+        "passwd",
+        "secret",
+        "apisecret",
+        "clientsecret",
+        "credential",
+        "credentials",
+        "signature",
+        "sig",
+        "xamzcredential",
+        "xamzsignature",
+        "xamzsecuritytoken",
+    }
+)
+
 
 def source_url(value: str) -> str:
     """Keep public article locations, removing credential/tracking queries and fragments."""
@@ -36,9 +63,7 @@ def source_url(value: str) -> str:
         [
             (key, value)
             for key, value in parse_qsl(url.query, keep_blank_values=True)
-            if not re.search(
-                r"key|token|secret|password|credential|authorization|signature", key, re.I
-            )
+            if key.lower().replace("_", "").replace("-", "") not in _CREDENTIAL_PARAMETERS
             and not key.lower().startswith("utm_")
             and key.lower() not in ("fbclid", "gclid")
         ]

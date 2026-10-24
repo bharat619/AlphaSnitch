@@ -23,6 +23,8 @@ Safe pagination restores ticker, publication window and sort on every page.
 Deduplication uses provider IDs and canonical source URLs. Article-identifying
 URL query parameters are preserved; credential/tracking parameters and fragments
 are removed. Raw responses and pagination cursors are never persisted.
+Credential matching uses complete names (case-insensitive, accepting `_` and `-`
+variants); identifiers such as `storyKey`, `keyword` and `signatureId` are preserved.
 
 Coverage states are `COMPLETE` (all query pages consumed), `EMPTY` (successful
 query with no items), `PARTIAL` (invalid items or interrupted retrieval),
@@ -87,6 +89,12 @@ and the report manifest. Research cannot change after report freeze. Showing or
 regenerating a report never calls providers or models. Renderer v2 adds research;
 existing v1 inputs retain their serialization and rendering. US configuration
 `us-2` adds the research route without altering saved `us-1` configurations.
+
+For runs requesting news, a finished price stage alone does not make reporting
+eligible. Every requested instrument must have a saved research coverage record,
+including failed or offline coverage. Both report generation and the database
+write boundary enforce this requirement, so regeneration during a news request
+cannot freeze empty research and prevent the fetched evidence from being saved.
 
 `--cache-mode replay --news` makes no network calls and explicitly records that
 news was not retrieved in the new price-replay run. Reopen the original run's

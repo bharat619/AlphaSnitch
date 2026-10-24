@@ -311,7 +311,7 @@ class ReportService:
                 if instrument_id not in instruments:
                     instruments[instrument_id] = repo.get_instrument(instrument_id)
             artifacts = repo.list_artifacts(run_id)
-            research = repo.list_research(run_id)
+            research = repo.research_for_report(run)
         packets, issues = [], []
         for snapshot in snapshots:
             try:
