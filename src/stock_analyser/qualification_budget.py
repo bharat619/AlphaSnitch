@@ -19,7 +19,7 @@ class RequestBudget:
             or any(type(n) is not int or n < 0 for n in ceilings.values())
             or type(overall) is not int
             or overall < 0
-            or not 0 < seconds <= 3600
+            or not 0 < seconds <= 86400
         ):
             raise ValueError("Invalid qualification bounds")
         self.ceilings, self.overall = dict(ceilings), overall

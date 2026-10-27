@@ -14,6 +14,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
+from stock_analyser.massive import MassiveSettings
 from stock_analyser.universe import SelectionPolicy
 from stock_analyser.universe_spike import POLICY, digest
 
@@ -38,7 +39,7 @@ SCOPE = digest(
 
 
 class QualificationCriteria(Evidence):
-    version: Literal["us-technology-qualification-2"] = "us-technology-qualification-2"
+    version: Literal["us-technology-qualification-3"] = "us-technology-qualification-3"
     metadata_ttl_hours: Literal[24] = 24
     rights_ttl_days: Literal[30] = 30
     minimum_selected: Literal[10] = 10
@@ -90,8 +91,27 @@ class InventoryEvidence(Evidence):
     transactionally_consistent: Literal[False] = False
 
 
+class CollectionControls(Evidence):
+    version: Literal["qualification-collection-1"] = "qualification-collection-1"
+    massive: MassiveSettings = MassiveSettings()
+    massive_pages_per_operation: int = Field(default=3, strict=True, ge=1, le=100)
+    yahoo_http_per_operation: int = Field(default=8, strict=True, ge=3, le=100)
+    yahoo_retries: int = Field(default=1, strict=True, ge=0, le=5)
+    yahoo_requests_per_minute: int = Field(default=60, strict=True, ge=1, le=60)
+    yahoo_timeout_seconds: float = Field(default=20, gt=0, le=120, allow_inf_nan=False)
+    yahoo_max_cooldown_seconds: float = Field(default=30, ge=0, le=120, allow_inf_nan=False)
+
+
+class ProfileMeasurements(Evidence):
+    attempted: Count
+    succeeded: Count
+    failed: Count
+    not_attempted: Count
+
+
 class CoverageEvidence(Evidence):
     # Reference rows partition into measured exclusions and potentially supported listings.
+    profile_measurements: ProfileMeasurements | None = None
     reference_rows: Count
     excluded_listings: Count
     potentially_supported: Count
@@ -110,6 +130,66 @@ class CoverageEvidence(Evidence):
     corroborated_mapping_matches: Count
     distinct_technology_securities: Count
     duplicate_technology_listings: Count
+
+
+class PopulationPlan(Evidence):
+    version: Literal["qualification-population-plan-2"] = "qualification-population-plan-2"
+    inventories: tuple[InventoryEvidence, ...]
+    inventory_sha256: Hash
+    requirements_sha256: Hash
+    controls: CollectionControls
+    classification: CoverageEvidence | None = None
+    history_candidate_upper_bound: Count
+    enrichment_source_http_upper: dict[Literal["massive", "yfinance"], Count]
+    enrichment_http_upper: Count
+    enrichment_network_wait_upper_seconds: float
+    candidate_upper_bound: Count
+    history_windows_per_candidate: Count
+    cold: dict[
+        Literal[
+            "massive_inventory",
+            "yahoo_inventory_including_auth",
+            "identity_resolution_http",
+            "classification_including_auth",
+            "mandatory_candidate_history",
+            "mandatory_benchmark_history",
+            "metadata_http",
+        ],
+        Count,
+    ]
+    warm_metadata_fresh: dict[
+        Literal[
+            "massive_inventory",
+            "yahoo_inventory_including_auth",
+            "identity_resolution_http",
+            "classification_including_auth",
+            "mandatory_candidate_history",
+            "mandatory_benchmark_history",
+            "metadata_http",
+        ],
+        Count,
+    ]
+    cold_source_http_upper: dict[Literal["massive", "yfinance"], Count]
+    warm_source_http_upper: dict[Literal["massive", "yfinance"], Count]
+    total_source_http_upper: dict[Literal["massive", "yfinance"], Count]
+    total_http_upper: Count
+    network_wait_upper_seconds: float
+    identity_method: Literal["reviewed_local_mappings_no_network"] = (
+        "reviewed_local_mappings_no_network"
+    )
+    sdk_calls: Literal[0] = 0
+    assumptions: tuple[
+        Literal[
+            "ALL_REFERENCE_ROWS_ARE_CANDIDATES_FOR_UPPER_BOUND",
+            "ALL_MANDATORY_WINDOWS_RESOLVED_INDEPENDENTLY",
+            "YAHOO_AUTH_REFRESH_RETRIES_WITHIN_ENFORCED_OPERATION_CAP",
+            "MASSIVE_PAGINATION_AND_RETRIES_HAVE_ENFORCED_CAPS",
+            "WARM_REFRESHES_ALL_CANDIDATES_AND_BENCHMARK",
+            "METADATA_EXPIRED_REFRESH_REQUIRES_ANOTHER_COLD_BUDGET",
+            "CPU_AND_FILESYSTEM_TIME_MEASURED_AGAINST_OVERALL_DEADLINE",
+        ],
+        ...,
+    ]
 
 
 class HistoryEvidence(Evidence):
@@ -229,6 +309,7 @@ class QualificationReport(Evidence):
     budget: BudgetEvidence
     rights: tuple[RightEvidence, ...]
     provenance: tuple[SourceUse, ...] = ()
+    workload_plan: PopulationPlan | None = None
     # Derived summaries are checked if supplied, never used as authority.
     gate: DerivedGate | None = None
 
@@ -337,9 +418,18 @@ def evaluate_qualification(report, criteria=CRITERIA, *, now: datetime, live=Fal
         and c.reference_rows == (sources["massive"].unique_rows if "massive" in sources else -1)
         and c.potentially_supported > 0
     )
+    measurements_consistent = True
+    if c.profile_measurements is not None:
+        m = c.profile_measurements
+        measurements_consistent = (
+            m.attempted + m.not_attempted == c.potentially_supported
+            and m.succeeded + m.failed == m.attempted
+            and m.failed == m.not_attempted == 0
+        )
     gate(
         "classification",
-        denominator
+        measurements_consistent
+        and denominator
         and c.method != "not_measured"
         and c.potentially_supported == c.technology + c.non_technology + c.unknown + c.conflicting
         and c.unknown == c.conflicting == 0,
@@ -405,11 +495,34 @@ def evaluate_qualification(report, criteria=CRITERIA, *, now: datetime, live=Fal
         r.origin == "synthetic" or provenance_valid,
         "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED",
     )
+    calculated_budget_valid = False
+    if r.workload_plan is not None:
+        from stock_analyser.qualification_plan import calculate_population_plan, plan_within_limits
+
+        try:
+            plan = calculate_population_plan(
+                r.inventories, r.workload_plan.controls, r.workload_plan.classification
+            )
+            calculated_budget_valid = (
+                plan == r.workload_plan
+                and plan.total_http_upper == r.budget.conservative_http_upper_bound
+                and plan_within_limits(
+                    plan,
+                    overall=r.budget.request_ceiling,
+                    sources=r.budget.per_source_ceilings,
+                    wall_seconds=r.budget.wall_seconds,
+                )
+                and r.coverage.distinct_technology_securities <= plan.history_candidate_upper_bound
+                and r.budget.sdk_calls == 0
+            )
+        except (ValueError, TypeError, KeyError):
+            calculated_budget_valid = False
     b = r.budget
     attempts = list(b.http_attempts.values())
     gate(
         "workload",
-        set(b.http_attempts) == set(criteria.required_sources)
+        calculated_budget_valid
+        and set(b.http_attempts) == set(criteria.required_sources)
         and set(b.per_source_ceilings) == set(criteria.required_sources)
         and all(v is not None for v in attempts)
         and all(v is not None and v <= b.per_source_ceilings[s] for s, v in b.http_attempts.items())
@@ -473,6 +586,8 @@ def implementation_hash():
         "qualification.py",
         "qualification_workflow.py",
         "qualification_budget.py",
+        "qualification_plan.py",
+        "qualification_yahoo.py",
         "universe.py",
         "universe_spike.py",
         "universe_policy.py",

@@ -267,7 +267,7 @@ versus unperformed workload are recorded in [pilot qualification](pilot-qualific
 ### Correctness review follow-up
 
 The f3438d5 fixture pass missed stale-window, actual-provider/account provenance,
-and shared transport deadline failures. See [review corrections](pilot-qualification.md#review-corrections-to-f3438d5).
+and shared transport deadline failures. See [qualification verification](pilot-qualification.md#verification-and-immutable-observations).
 Current criteria `us-technology-qualification-2` independently checks candidate and
 benchmark completed-session windows at qualification as-of and records an actual
 source/account provenance gate. Historical criteria-v1 observations remain
@@ -281,3 +281,25 @@ acceptance. Its [reopen evidence](evidence/foundation-qualification-review-reope
 and the [separate criteria-v2 preflight](evidence/pilot-qualification-review-2026-10-27.json)
 preserve the actual measurements. Live smoke was NOT_RUN, rights UNKNOWN, pilot
 FAIL and milestone incomplete. All previous observations remain unchanged.
+
+
+### Native collection and calculated planner follow-up
+
+Current criteria `us-technology-qualification-3` add native bounded Yahoo inventory/
+profile acquisition and a recomputed population workload plan. See
+[pilot qualification](pilot-qualification.md) for exact offline/live-stage contracts,
+operation/authentication/page limits, complete-reference enrichment, measured
+classification refinement, retained-data scope and source/account protections.
+The earlier review's Yahoo/planner gaps are superseded by this implementation.
+Actual live qualification remains unperformed under the operator's UNKNOWN rights
+instruction. Pilot and milestone acceptance remain FAIL; no provider purchase,
+quota increase or unreviewed broad run occurred.
+
+The native follow-up's [full checklist](evidence/foundation-qualification-native-release-2026-10-27.json)
+records **584 passed, zero failures/errors/skips**, exact suite reconciliation and
+mandatory fresh-process acceptance, with separate
+[reopen evidence](evidence/foundation-qualification-native-reopen-2026-10-27.json).
+Following the final Yahoo profile-host correction, all 298 focused tests passed.
+The [final gate recomputation](evidence/qualification-native-final-gate-2026-10-27.json)
+references that fixture record and the separately captured final-code preflight.
+No live calls occurred; permissions remain UNKNOWN and milestone acceptance FAIL.

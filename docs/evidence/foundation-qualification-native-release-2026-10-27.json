@@ -1,0 +1,111 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-10-27T12:32:30.858004+00:00",
+  "source_commit": "98957ff08d1cb7564feb18b24fb9d136d9a5b012",
+  "source_tracked_dirty": true,
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "fixture_readiness": {
+    "tests": 584,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 584,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "428064f981ee058c924b614ef6fb4dbcefd5e0a9d4c734b0619d79b6f629b3de",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "live_observation": {
+    "status": "NOT_RUN",
+    "publication_timing": "unverified"
+  },
+  "pilot_sector": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "INVENTORY_INCOMPLETE_OR_INCONSISTENT",
+      "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING",
+      "IDENTITY_UNRESOLVED_OR_INCONSISTENT",
+      "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE",
+      "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE",
+      "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED",
+      "WORKLOAD_UNVERIFIED_OR_EXHAUSTED",
+      "LIVE_EVIDENCE_REQUIRED"
+    ],
+    "gates": {
+      "contract": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "freshness": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "inventory": {
+        "status": "FAIL",
+        "reasons": [
+          "INVENTORY_INCOMPLETE_OR_INCONSISTENT"
+        ]
+      },
+      "classification": {
+        "status": "FAIL",
+        "reasons": [
+          "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING"
+        ]
+      },
+      "identity": {
+        "status": "FAIL",
+        "reasons": [
+          "IDENTITY_UNRESOLVED_OR_INCONSISTENT"
+        ]
+      },
+      "history_liquidity": {
+        "status": "FAIL",
+        "reasons": [
+          "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE"
+        ]
+      },
+      "rights": {
+        "status": "FAIL",
+        "reasons": [
+          "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE"
+        ]
+      },
+      "provenance": {
+        "status": "FAIL",
+        "reasons": [
+          "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED"
+        ]
+      },
+      "workload": {
+        "status": "FAIL",
+        "reasons": [
+          "WORKLOAD_UNVERIFIED_OR_EXHAUSTED"
+        ]
+      },
+      "origin": {
+        "status": "FAIL",
+        "reasons": [
+          "LIVE_EVIDENCE_REQUIRED"
+        ]
+      }
+    }
+  },
+  "pilot_sector_source": {
+    "kind": "explicit_qualification",
+    "reference": "/Users/bharathegde/Projects/stock-market-analyser/docs/evidence/pilot-qualification-native-preflight-2026-10-27.json",
+    "sha256": "c47a136ffbafc3cef0de405d9d6405650b98e12353aca28cbd4e8662e3c06a45"
+  },
+  "milestone": {
+    "complete": false,
+    "blockers": [
+      "LIVE_SMOKE_NOT_OBSERVED",
+      "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+    ]
+  },
+  "limitations": "Data readiness only; no recommendation or production reliability claim"
+}

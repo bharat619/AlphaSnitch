@@ -498,7 +498,7 @@ def qualify_universe(
     ctx: typer.Context,
     output: Path = typer.Option(..., help="New directory for aggregate coverage findings."),
     mode: str = typer.Option(
-        "plan", help="plan, inventory, or execute; live modes require a manifest."
+        "plan", help="plan, inventory, enrich, or execute; live modes require a manifest."
     ),
     manifest: Path | None = typer.Option(None, help="Reviewed qualification workload JSON."),
     manifest_sha256: str | None = typer.Option(
@@ -506,6 +506,15 @@ def qualify_universe(
     ),
     population_inputs: Path | None = typer.Option(
         None, help="Rights-permitted local population export."
+    ),
+    inventory_evidence: Path | None = typer.Option(
+        None, help="Complete aggregate inventories for offline planning."
+    ),
+    inventory_inputs: Path | None = typer.Option(
+        None, help="Reviewed private inventory detail for enrichment."
+    ),
+    identity_mappings: Path | None = typer.Option(
+        None, help="Reviewed local dated provider mappings."
     ),
     max_pages: int = typer.Option(2, min=1, max=100),
     profile_limit: int = typer.Option(
@@ -515,13 +524,20 @@ def qualify_universe(
     """Plan offline or explicitly observe a bounded qualification; unresolved evidence fails."""
     from datetime import UTC, datetime
 
-    from stock_analyser.qualification import file_hash
+    from stock_analyser.qualification import (
+        CollectionControls,
+        QualificationReport,
+        evaluate_qualification,
+        file_hash,
+    )
     from stock_analyser.qualification_workflow import (
         WorkloadManifest,
         execute_population,
         observe_blocked,
+        planned_manifest,
         preflight,
         run_inventory,
+        run_population_enrichment,
     )
 
     try:
@@ -529,20 +545,65 @@ def qualify_universe(
             raise ValueError(
                 "Choose a new output directory; previous findings cannot be overwritten"
             )
-        if mode not in ("plan", "inventory", "execute") or profile_limit:
+        if mode not in ("plan", "inventory", "enrich", "execute") or profile_limit:
             raise ValueError(
-                "Use plan, inventory or execute; profile samples cannot qualify coverage"
+                "Use plan, inventory, enrich or execute; profile samples cannot qualify coverage"
             )
         if manifest is not None:
             workload = WorkloadManifest.model_validate_json(manifest.read_text())
         else:
-            workload = WorkloadManifest(max_pages_per_source=max_pages)
+            workload = WorkloadManifest(
+                max_pages_per_source=max_pages, controls=CollectionControls(massive=ctx.obj.massive)
+            )
+        if inventory_evidence is not None:
+            if mode != "plan":
+                raise ValueError("Inventory evidence is only an offline planning input")
+            inventory_report = QualificationReport.model_validate_json(
+                inventory_evidence.read_text()
+            )
+            gates = evaluate_qualification(inventory_report, now=datetime.now(UTC))["gates"]
+            if any(
+                gates.get(k, {}).get("status") != "PASS"
+                for k in ("contract", "freshness", "inventory")
+            ):
+                raise ValueError("Fresh complete compatible inventories required for planning")
+            classification = (
+                inventory_report.coverage
+                if all(
+                    gates.get(k, {}).get("status") == "PASS" for k in ("classification", "identity")
+                )
+                else None
+            )
+            workload = planned_manifest(
+                inventory_report.inventories, workload, classification=classification
+            )
+        if mode == "plan":
+            if population_inputs is not None:
+                workload = workload.model_copy(
+                    update={"population_inputs_sha256": file_hash(population_inputs)}
+                )
+            if identity_mappings is not None:
+                workload = workload.model_copy(
+                    update={"identity_mappings_sha256": file_hash(identity_mappings)}
+                )
+            if inventory_inputs is not None:
+                workload = workload.model_copy(
+                    update={"inventory_detail_sha256": file_hash(inventory_inputs)}
+                )
         if mode != "plan" and (manifest is None or manifest_sha256 != file_hash(manifest)):
             raise ValueError(
                 "Live execution requires an explicit manifest and its reviewed SHA-256"
             )
-        if mode == "plan" or preflight(workload, now=datetime.now(UTC)):
+        if mode == "plan" or preflight(workload, now=datetime.now(UTC), stage=mode):
             report = observe_blocked(output, workload, mode=mode)
+        elif mode == "enrich":
+            if inventory_inputs is None or identity_mappings is None:
+                raise ValueError(
+                    "Enrichment requires exact reviewed private inventory and mapping files"
+                )
+            report = run_population_enrichment(
+                output, workload, inventory_inputs, identity_mappings
+            )
         elif mode == "execute":
             if population_inputs is None:
                 report = observe_blocked(output, workload, mode=mode)
@@ -560,7 +621,11 @@ def qualify_universe(
             )
             lock_path = user_data_path("stock-analyser", appauthor=False) / "massive.lock"
             with live_client(
-                load_massive_key(), ctx.obj.massive, lock_path, budget=budget
+                load_massive_key(),
+                workload.controls.massive,
+                lock_path,
+                budget=budget,
+                max_pages_per_operation=workload.controls.massive_pages_per_operation,
             ) as client:
                 report = run_inventory(client, output, workload, budget)
     except Exception:

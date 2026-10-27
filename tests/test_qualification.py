@@ -7,8 +7,10 @@ import pytest
 from typer.testing import CliRunner
 
 from stock_analyser.cli import app
+from stock_analyser.massive import MassiveSettings
 from stock_analyser.qualification import (
     BudgetEvidence,
+    CollectionControls,
     CoverageEvidence,
     HistoryEvidence,
     InventoryEvidence,
@@ -17,12 +19,14 @@ from stock_analyser.qualification import (
     requirements_hash,
 )
 from stock_analyser.qualification_budget import QualificationStop, RequestBudget
+from stock_analyser.qualification_plan import calculate_population_plan
 from stock_analyser.qualification_workflow import (
     CRITERIA,
     WorkloadManifest,
     classify_population,
     measure_selection,
     observe_blocked,
+    planned_manifest,
     population_manifest,
     preflight,
     reconcile_identity,
@@ -47,7 +51,20 @@ def qualifying():
         )
         for r in unknown_rights(NOW)
     )
-    manifest = WorkloadManifest(rights=rights)
+    manifest = WorkloadManifest(
+        rights=rights,
+        request_ceiling=100,
+        per_source_ceilings={"massive": 50, "yfinance": 50},
+        controls=CollectionControls(
+            massive=MassiveSettings(
+                retries=0, requests_per_minute=60, timeout_seconds=1, max_retry_delay_seconds=1
+            ),
+            massive_pages_per_operation=1,
+            yahoo_http_per_operation=3,
+            yahoo_timeout_seconds=1,
+            yahoo_max_cooldown_seconds=1,
+        ),
+    )
     inventories = tuple(
         InventoryEvidence(
             source=source,
@@ -68,6 +85,7 @@ def qualifying():
             ("yfinance", "us_technology_discovery", "reported_total"),
         )
     )
+    manifest = planned_manifest(inventories, manifest)
     coverage = CoverageEvidence(
         reference_rows=10,
         excluded_listings=0,
@@ -110,14 +128,14 @@ def qualifying():
     budget = BudgetEvidence(
         request_ceiling=100,
         per_source_ceilings={"massive": 50, "yfinance": 50},
-        http_attempts={"massive": 12, "yfinance": 12},
-        sdk_calls=10,
+        http_attempts=dict(manifest.population_plan.total_source_http_upper),
+        sdk_calls=0,
         retries=0,
         cooldown_seconds=0,
         elapsed_seconds=0,
         wall_seconds=180,
         concurrency=1,
-        conservative_http_upper_bound=50,
+        conservative_http_upper_bound=manifest.estimated_http_upper_bound,
         inventory_complete_for_estimate=True,
         cold_measured=True,
         warm_measured=True,
@@ -180,6 +198,7 @@ def test_complete_synthetic_can_pass_but_never_a_live_release(qualifying):
         (("rights", 0, "retention_days"), 1),
         (("rights", 0, "reviewed_at"), "2026-01-01T00:00:00Z"),
         (("rights", 0, "valid_until"), "2026-10-26T00:00:00Z"),
+        (("budget", "sdk_calls"), 1),
         (("budget", "http_attempts", "yfinance"), None),
         (("budget", "http_attempts", "massive"), 51),
         (("budget", "elapsed_seconds"), 181),
@@ -371,6 +390,9 @@ def test_reviewed_population_export_measures_all_candidates_without_raw_report_l
         else:
             i["reported_total"] = 12
         inventories.append(i)
+    calculated = calculate_population_plan(
+        inventories, CollectionControls.model_validate(qualifying["workload_plan"]["controls"])
+    )
     inputs = {
         "snapshot": snapshot.model_dump(mode="json"),
         "inventories": inventories,
@@ -384,7 +406,11 @@ def test_reviewed_population_export_measures_all_candidates_without_raw_report_l
             }
             for c in candidates
         },
-        "budget": qualifying["budget"],
+        "budget": {
+            **qualifying["budget"],
+            "conservative_http_upper_bound": calculated.total_http_upper,
+            "http_attempts": dict(calculated.total_source_http_upper),
+        },
         "origin": "synthetic",
         "started_at": stamp.isoformat(),
         "finished_at": stamp.isoformat(),
@@ -408,7 +434,9 @@ def test_reviewed_population_export_measures_all_candidates_without_raw_report_l
         stage="population",
         request_ceiling=100,
         per_source_ceilings={"massive": 50, "yfinance": 50},
-        estimated_http_upper_bound=50,
+        estimated_http_upper_bound=calculated.total_http_upper,
+        controls=calculated.controls,
+        population_plan=calculated,
         reference_count=12,
         inventory_sha256=digest(
             [InventoryEvidence.model_validate(i).model_dump(mode="json") for i in inventories]
@@ -819,6 +847,9 @@ def test_population_export_regressions_end_to_end(qualifying, tmp_path, mutation
             item["pages"][0]["sha256"] = digest(project(rows, REFERENCE_FIELDS, "ticker"))
         else:
             item["reported_total"] = 12
+    calculated = calculate_population_plan(
+        inventories, CollectionControls.model_validate(qualifying["workload_plan"]["controls"])
+    )
     inputs = {
         "snapshot": snapshot.model_dump(mode="json"),
         "benchmark": benchmark.model_dump(mode="json"),
@@ -832,7 +863,11 @@ def test_population_export_regressions_end_to_end(qualifying, tmp_path, mutation
             }
             for c in snapshot.request.population.candidates
         },
-        "budget": qualifying["budget"],
+        "budget": {
+            **qualifying["budget"],
+            "conservative_http_upper_bound": calculated.total_http_upper,
+            "http_attempts": dict(calculated.total_source_http_upper),
+        },
         "origin": "live" if mutation == "live_fixture" else "synthetic",
         "started_at": stamp.isoformat(),
         "finished_at": stamp.isoformat(),
@@ -853,7 +888,9 @@ def test_population_export_regressions_end_to_end(qualifying, tmp_path, mutation
         stage="population",
         request_ceiling=100,
         per_source_ceilings={"massive": 50, "yfinance": 50},
-        estimated_http_upper_bound=50,
+        estimated_http_upper_bound=calculated.total_http_upper,
+        controls=calculated.controls,
+        population_plan=calculated,
         reference_count=12,
         inventory_sha256=digest(
             [InventoryEvidence.model_validate(i).model_dump(mode="json") for i in inventories]

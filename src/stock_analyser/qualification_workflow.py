@@ -1,15 +1,12 @@
-"""Two-stage qualification with reviewed manifests and local selection reuse.
+"""Reviewed bounded inventories/enrichment, calculated plans and local selection qualification."""
 
-The installed Yahoo SDK has no verified HTTP amplification bound. Its live
-adapter deliberately cannot dispatch broad collection. Injected controlled
-transports/export adapters can exercise the complete qualification path.
-"""
-
+import time
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
@@ -33,6 +30,12 @@ from stock_analyser.qualification import (
     write_report,
 )
 from stock_analyser.qualification_budget import RequestBudget
+from stock_analyser.qualification_plan import (
+    CollectionControls,
+    PopulationPlan,
+    calculate_population_plan,
+    plan_within_limits,
+)
 from stock_analyser.universe_policy import TECHNOLOGY_RULES_V1, reference_exclusions
 from stock_analyser.universe_spike import digest
 from stock_analyser.version import source_version
@@ -55,12 +58,12 @@ class WorkloadManifest(Evidence):
     criteria_sha256: Hash = model_hash(CRITERIA)
     scope_sha256: Hash = SCOPE
     max_pages_per_source: int = Field(default=2, strict=True, ge=1, le=100)
-    request_ceiling: int = Field(default=10, strict=True, ge=1, le=10000)
+    request_ceiling: int = Field(default=10, strict=True, ge=1, le=100000)
     per_source_ceilings: dict[Literal["massive", "yfinance"], Count] = {
         "massive": 6,
         "yfinance": 4,
     }
-    wall_seconds: float = Field(default=180, gt=0, le=3600, allow_inf_nan=False)
+    wall_seconds: float = Field(default=180, gt=0, le=86400, allow_inf_nan=False)
     concurrency: Literal[1] = 1
     reference_count: Count | None = None
     inventory_sha256: Hash | None = None
@@ -68,6 +71,10 @@ class WorkloadManifest(Evidence):
     estimated_http_upper_bound: Count | None = None
     rights: tuple[RightEvidence, ...] = ()
     source_bindings: tuple[SourceBinding, ...] = ()
+    controls: CollectionControls = CollectionControls()
+    population_plan: PopulationPlan | None = None
+    inventory_detail_sha256: Hash | None = None
+    identity_mappings_sha256: Hash | None = None
 
 
 def unknown_rights(now):
@@ -91,7 +98,7 @@ def unknown_rights(now):
     )
 
 
-def preflight(manifest, *, now):
+def preflight(manifest, *, now, stage=None):
     """No credential loading or provider imports; account rights are reviewed evidence."""
     blockers = []
     if manifest.criteria_sha256 != model_hash(CRITERIA) or manifest.scope_sha256 != SCOPE:
@@ -101,6 +108,9 @@ def preflight(manifest, *, now):
     rights = {(r.provider, r.dataset, r.operation): r for r in manifest.rights}
     if len(rights) != len(manifest.rights) or set(rights) != set(CRITERIA.required_rights):
         blockers.append("RIGHTS_EVIDENCE_MISSING")
+    for provider in ("massive", "yfinance"):
+        if len({r.account_scope_sha256 for r in manifest.rights if r.provider == provider}) > 1:
+            blockers.append("RIGHTS_ACCOUNT_SCOPE_CONFLICT")
     for r in manifest.rights:
         if (
             r.disposition != "permitted"
@@ -116,9 +126,38 @@ def preflight(manifest, *, now):
         manifest.reference_count is None
         or manifest.inventory_sha256 is None
         or manifest.estimated_http_upper_bound is None
-        or manifest.estimated_http_upper_bound > manifest.request_ceiling
+        or (stage != "enrich" and manifest.estimated_http_upper_bound > manifest.request_ceiling)
     ):
         blockers.append("POPULATION_WORKLOAD_UNBOUNDED")
+    if manifest.population_plan is not None:
+        try:
+            plan = calculate_population_plan(
+                manifest.population_plan.inventories,
+                manifest.controls,
+                manifest.population_plan.classification,
+            )
+            if (
+                plan != manifest.population_plan
+                or plan.inventory_sha256 != manifest.inventory_sha256
+                or plan.candidate_upper_bound != manifest.reference_count
+                or plan.total_http_upper != manifest.estimated_http_upper_bound
+            ):
+                blockers.append("WORKLOAD_PLAN_MISMATCH")
+            if not plan_within_limits(
+                plan,
+                overall=manifest.request_ceiling,
+                sources=manifest.per_source_ceilings,
+                wall_seconds=manifest.wall_seconds,
+                enrichment=stage == "enrich",
+            ):
+                blockers.append("CALCULATED_WORKLOAD_EXCEEDS_REVIEWED_LIMITS")
+            if (
+                plan.classification is not None
+                and not now - timedelta(hours=24) <= plan.classification.as_of <= now
+            ):
+                blockers.append("WORKLOAD_CLASSIFICATION_STALE_OR_FUTURE")
+        except (ValueError, TypeError):
+            blockers.append("WORKLOAD_PLAN_INVALID")
     return sorted(set(blockers))
 
 
@@ -233,6 +272,7 @@ def report_for(
         budget=budget,
         rights=manifest.rights or unknown_rights(finished),
         provenance=provenance,
+        workload_plan=manifest.population_plan,
     )
 
 
@@ -240,7 +280,7 @@ def budget_evidence(manifest, budget, reason, *, sdk_calls=0):
     return BudgetEvidence(
         request_ceiling=manifest.request_ceiling,
         per_source_ceilings=manifest.per_source_ceilings,
-        http_attempts={**budget.counts, "yfinance": None},
+        http_attempts=dict(budget.counts),
         sdk_calls=sdk_calls,
         retries=budget.retries,
         cooldown_seconds=budget.cooldown_seconds,
@@ -261,7 +301,7 @@ def observe_blocked(output, manifest, *, mode="plan", now=lambda: datetime.now(U
         raise ValueError("Choose a new output directory; previous findings cannot be overwritten")
     started = now()
     blockers = preflight(manifest, now=started)
-    reason = blockers[0] if blockers else "YAHOO_HTTP_AMPLIFICATION_UNBOUNDED"
+    reason = blockers[0] if blockers else "POPULATION_EVIDENCE_REQUIRED"
     budget = RequestBudget(
         manifest.per_source_ceilings, manifest.request_ceiling, manifest.wall_seconds
     )
@@ -287,14 +327,18 @@ def population_manifest(reference, discovery, manifest):
     """Do not convert lower bounds into population ceilings. No guessed amplification."""
     if reference.status != "COMPLETE" or discovery.status != "COMPLETE":
         raise ValueError("Complete inventories required before planning population work")
+    return planned_manifest(tuple(inventory_evidence(e) for e in (reference, discovery)), manifest)
+
+
+def planned_manifest(inventories, manifest, classification=None):
+    plan = calculate_population_plan(inventories, manifest.controls, classification)
     return manifest.model_copy(
         update={
             "stage": "population",
-            "reference_count": len(reference.rows),
-            "inventory_sha256": digest(
-                [inventory_evidence(e).model_dump(mode="json") for e in (reference, discovery)]
-            ),
-            "estimated_http_upper_bound": None,
+            "reference_count": plan.candidate_upper_bound,
+            "inventory_sha256": plan.inventory_sha256,
+            "estimated_http_upper_bound": plan.total_http_upper,
+            "population_plan": plan,
         }
     )
 
@@ -320,6 +364,9 @@ def reconcile_identity(reference, mapping, *, as_of):
     Mapping evidence stays local, outside the aggregate report. Alternate punctuation
     and renames must be explicit dated mappings; identifiers are never fabricated.
     """
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("Identity reconciliation requires an aware clock")
+    local_date = as_of.astimezone(ZoneInfo("America/New_York")).date()
     if not mapping:
         return "unmatched", None
     if isinstance(mapping, list):
@@ -331,8 +378,8 @@ def reconcile_identity(reference, mapping, *, as_of):
         or mapping.get("currency") != "USD"
         or mapping.get("type") != "CS"
         or not mapping.get("effective_from")
-        or mapping["effective_from"] > as_of.date()
-        or (mapping.get("effective_to") and mapping["effective_to"] <= as_of.date())
+        or mapping["effective_from"] > local_date
+        or (mapping.get("effective_to") and mapping["effective_to"] <= local_date)
     ):
         return "conflicting", None
     share, listing = mapping.get("share_class_figi"), mapping.get("composite_figi")
@@ -462,8 +509,18 @@ def classify_population(rows, mappings, profiles, *, now):
                     if raw in TECHNOLOGY_RULES_V1.other_known_sectors
                     else "unknown"
                 )
-                if profile.get("conflicting"):
+                if profile.get("identity_unverified"):
+                    sector = "unknown"
+                    counts["resolved"] -= 1
+                    counts["unmatched"] += 1
+                    methods[method] -= 1
+                    outcomes[key] = ("unmatched", None)
+                elif profile.get("conflicting"):
                     sector = "conflicting"
+                    counts["resolved"] -= 1
+                    counts["conflicting"] += 1
+                    methods[method] -= 1
+                    outcomes[key] = ("conflicting", None)
         sector_counts[sector] += 1
         sectors[key] = sector
         if row.get("composite_figi"):
@@ -476,6 +533,15 @@ def classify_population(rows, mappings, profiles, *, now):
         if len({(x.get("share_class_figi"), x.get("primary_exchange"), x["ticker"]) for x in group})
         > 1
     }
+    symbols = {}
+    for row in supported:
+        key = row["ticker"]
+        mapping = mappings.get(key)
+        if outcomes[key][0] == "resolved" and isinstance(mapping, dict):
+            symbols.setdefault(mapping.get("provider_symbol"), []).append(row)
+    for group in symbols.values():
+        if len({(r.get("share_class_figi"), r.get("composite_figi")) for r in group}) > 1:
+            conflict_tickers.update(r["ticker"] for r in group)
     shares = {}
     for row in supported:
         if row.get("share_class_figi"):
@@ -518,20 +584,113 @@ def classify_population(rows, mappings, profiles, *, now):
     )
 
 
-def run_inventory(client, output, manifest, budget, *, now=lambda: datetime.now(UTC)):
-    from stock_analyser.universe_spike import enumerate_massive
+def yahoo_client(budget, controls, *, transport=None, sleep=None):
+    from stock_analyser.qualification_yahoo import YahooQualificationClient
+
+    kwargs = {"transport": transport} if transport is not None else {}
+    if sleep is not None:
+        kwargs["sleep"] = sleep
+    if transport is None:
+        from platformdirs import user_data_path
+
+        kwargs["lease_path"] = user_data_path("stock-analyser", appauthor=False) / "yahoo.lock"
+    return YahooQualificationClient(
+        budget,
+        http_cap=controls.yahoo_http_per_operation,
+        retries=controls.yahoo_retries,
+        requests_per_minute=controls.yahoo_requests_per_minute,
+        timeout_seconds=controls.yahoo_timeout_seconds,
+        max_cooldown_seconds=controls.yahoo_max_cooldown_seconds,
+        **kwargs,
+    )
+
+
+def private_json(output, name, value):
+    from stock_analyser.collection import encode, immutable_write
+
+    private = output / "private"
+    private.mkdir(mode=0o700, exist_ok=True)
+    path = private / name
+    return path, immutable_write(path, encode(value))
+
+
+def run_inventory(client, output, manifest, budget, *, now=lambda: datetime.now(UTC), yahoo=None):
+    from dataclasses import asdict
+
+    from stock_analyser.universe_spike import enumerate_massive, enumerate_yahoo
 
     if output.exists():
         raise ValueError("Choose a new output directory; previous findings cannot be overwritten")
     started = now()
     if preflight(manifest, now=started):
         return observe_blocked(output, manifest, mode="inventory", now=now)
-    if client.budget is not budget:
-        raise ValueError("Inventory client must share the reviewed request budget")
+    if manifest.stage != "inventory":
+        raise ValueError("Inventory mode requires an inventory manifest")
+    if client.budget is not budget or client.settings != manifest.controls.massive:
+        raise ValueError("Inventory transport controls differ from reviewed manifest")
     output.mkdir(parents=True, exist_ok=False)
     reference = enumerate_massive(client, max_pages=manifest.max_pages_per_source, now=now)
+    owned = yahoo is None
+    try:
+        yahoo = yahoo or yahoo_client(budget, manifest.controls)
+        if (
+            yahoo.budget is not budget
+            or yahoo.http_cap != manifest.controls.yahoo_http_per_operation
+        ):
+            raise ValueError("Yahoo must share reviewed transport controls")
+        discovery = enumerate_yahoo(yahoo.screen, max_pages=manifest.max_pages_per_source, now=now)
+    except Exception:
+        from stock_analyser.universe_spike import Enumeration
+
+        discovery = Enumeration("yfinance", {}, reason="YAHOO_SETUP_FAILURE", errors=1)
+    finally:
+        if owned and yahoo is not None:
+            yahoo.close()
+    finished = now()
+    evidence = (inventory_evidence(reference), inventory_evidence(discovery))
+    detail = {
+        "version": "qualification-inventory-detail-1",
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "controls": manifest.controls.model_dump(mode="json"),
+        "reference": asdict(reference),
+        "discovery": asdict(discovery),
+        "http_attempts": dict(budget.counts),
+        "retries": budget.retries,
+        "cooldown_seconds": budget.cooldown_seconds,
+    }
+    ref_path, ref_hash = private_json(output, "reference.json", reference.rows)
+    detail["reference_source"] = {
+        "provider": "massive",
+        "provider_symbol": "US:active_stocks",
+        "retrieved_at": finished.isoformat(),
+        "reference": str(ref_path.resolve()),
+        "sha256": ref_hash,
+    }
+    _, detail_hash = private_json(output, "inventory.json", detail)
+    if reference.status == discovery.status == "COMPLETE":
+        planned = population_manifest(reference, discovery, manifest).model_copy(
+            update={
+                "inventory_detail_sha256": detail_hash,
+                "source_bindings": (
+                    *manifest.source_bindings,
+                    SourceBinding(
+                        provider="massive",
+                        dataset="reference",
+                        source_sha256=ref_hash,
+                        account_scope_sha256=next(
+                            r.account_scope_sha256
+                            for r in manifest.rights
+                            if r.provider == "massive"
+                        ),
+                    ),
+                ),
+            }
+        )
+        with (output / "population-workload.json").open("x", encoding="utf-8") as stream:
+            stream.write(planned.model_dump_json(indent=2) + "\n")
     supported = sum(potentially_supported(row) for row in reference.rows)
-    coverage = empty_coverage(now()).model_copy(
+    coverage = empty_coverage(finished).model_copy(
         update={
             "reference_rows": len(reference.rows),
             "potentially_supported": supported,
@@ -540,27 +699,294 @@ def run_inventory(client, output, manifest, budget, *, now=lambda: datetime.now(
             "unmatched": supported,
         }
     )
+    reason = (
+        "INVENTORY_COMPLETE"
+        if reference.status == discovery.status == "COMPLETE"
+        else budget.stop_reason or "INVENTORY_INCOMPLETE"
+    )
     report = report_for(
         manifest,
         started=started,
-        finished=now(),
+        finished=finished,
         origin="live",
-        inventories=(
-            inventory_evidence(reference),
-            empty_inventory("yfinance", "YAHOO_HTTP_AMPLIFICATION_UNBOUNDED"),
-        ),
+        inventories=evidence,
         coverage=coverage,
         history=empty_history(),
-        budget=budget_evidence(
-            manifest,
-            budget,
-            budget.stop_reason
-            or (
-                "YAHOO_HTTP_AMPLIFICATION_UNBOUNDED"
-                if reference.status == "COMPLETE"
-                else reference.reason
-            ),
-        ),
+        budget=budget_evidence(manifest, budget, reason),
+    )
+    return write_report(output, report, now=now(), _reserved=True)
+
+
+def run_population_enrichment(
+    output,
+    manifest,
+    inventory_path,
+    mappings_path,
+    *,
+    now=lambda: datetime.now(UTC),
+    transport=None,
+    sleep=None,
+    clock=time.monotonic,
+):
+    """Visit every potentially supported listing, including discovery absences.
+
+    Missing/ambiguous mappings are retained as unknown, never inferred from symbol
+    equality. Output details are private, rights-permitted local evidence. Price
+    selection/replay consumes this metadata in the separate execute stage.
+    """
+    import json
+
+    from stock_analyser.universe_spike import (
+        DISCOVERY_FIELDS,
+        REFERENCE_FIELDS,
+        Enumeration,
+        project,
+    )
+
+    if output.exists():
+        raise ValueError("Choose a new output directory; previous findings cannot be overwritten")
+    if preflight(manifest, now=now(), stage="enrich"):
+        return observe_blocked(output, manifest, mode="enrich", now=now)
+    if (
+        manifest.stage != "population"
+        or manifest.population_plan is None
+        or manifest.inventory_detail_sha256 != file_hash(inventory_path)
+        or manifest.identity_mappings_sha256 != file_hash(mappings_path)
+    ):
+        raise ValueError(
+            "Native enrichment requires calculated plan and exact reviewed input hashes"
+        )
+    detail = json.loads(inventory_path.read_text())
+    if detail.get("version") != "qualification-inventory-detail-1":
+        raise ValueError("Unsupported inventory detail version")
+    if detail["controls"] != manifest.controls.model_dump(mode="json"):
+        raise ValueError("Inventory controls differ from the population plan")
+    reference, discovery = Enumeration(**detail["reference"]), Enumeration(**detail["discovery"])
+    reference.rows = project(reference.rows, REFERENCE_FIELDS, "ticker")
+    discovery.rows = project(discovery.rows, DISCOVERY_FIELDS, "symbol")
+    inventories = tuple(inventory_evidence(e) for e in (reference, discovery))
+    if (
+        calculate_population_plan(
+            inventories, manifest.controls, manifest.population_plan.classification
+        )
+        != manifest.population_plan
+    ):
+        raise ValueError("Actual inventories differ from calculated plan")
+    from stock_analyser.contracts import SourceRecord
+
+    source = SourceRecord.model_validate(detail["reference_source"])
+    if (
+        source.provider != "massive"
+        or source.sha256 != file_hash(Path(source.reference))
+        or project(json.loads(Path(source.reference).read_text()), REFERENCE_FIELDS, "ticker")
+        != reference.rows
+    ):
+        raise ValueError("Retained reference source does not match inventory")
+    for enumeration, key in ((reference, "ticker"), (discovery, "symbol")):
+        if len({r[key] for r in enumeration.rows}) != len(enumeration.rows):
+            raise ValueError("Duplicate private inventory identifiers")
+        offset = 0
+        for page in enumeration.pages:
+            if digest(enumeration.rows[offset : offset + page["rows"]]) != page["sha256"]:
+                raise ValueError("Private inventory page hash mismatch")
+            offset += page["rows"]
+        if offset != len(enumeration.rows):
+            raise ValueError("Private inventory rows are incomplete")
+    acquired_start = datetime.fromisoformat(detail["started_at"])
+    acquired_finish = datetime.fromisoformat(detail["finished_at"])
+    if not now() - timedelta(hours=24) <= acquired_start <= acquired_finish <= now() or any(
+        not acquired_start <= p.retrieved_at <= acquired_finish
+        for i in inventories
+        for p in i.pages
+    ):
+        raise ValueError("Private inventories are stale, future or inconsistent")
+    mappings = json.loads(mappings_path.read_text())
+    if not isinstance(mappings, dict):
+        raise ValueError("Invalid reviewed mappings")
+    for item in mappings.values():
+        if isinstance(item, dict):
+            for key in ("effective_from", "effective_to"):
+                if item.get(key):
+                    from datetime import date
+
+                    item[key] = date.fromisoformat(item[key])
+            if item.get("reviewed_at"):
+                item["reviewed_at"] = datetime.fromisoformat(item["reviewed_at"])
+    started = datetime.fromisoformat(detail["started_at"])
+    elapsed = (now() - started).total_seconds()
+    if elapsed < 0:
+        raise ValueError("Future inventory start")
+    budget = RequestBudget(
+        manifest.per_source_ceilings, manifest.request_ceiling, manifest.wall_seconds, clock=clock
+    )
+    consumed = detail["http_attempts"]
+    if (
+        set(consumed) != {"massive", "yfinance"}
+        or any(
+            type(v) is not int or v < 0 or v > manifest.per_source_ceilings[p]
+            for p, v in consumed.items()
+        )
+        or sum(consumed.values()) > manifest.request_ceiling
+    ):
+        raise ValueError("Invalid inventory request accounting")
+    import math
+
+    if (
+        type(detail["retries"]) is not int
+        or not 0 <= detail["retries"] <= sum(consumed.values())
+        or not isinstance(detail["cooldown_seconds"], (int, float))
+        or not math.isfinite(detail["cooldown_seconds"])
+        or detail["cooldown_seconds"] < 0
+    ):
+        raise ValueError("Invalid inventory retry/cooldown accounting")
+    budget.counts.update(consumed)
+    budget.started -= elapsed
+    budget.retries = detail["retries"]
+    budget.cooldown_seconds = detail["cooldown_seconds"]
+    output.mkdir(parents=True, exist_ok=False)
+    yahoo = yahoo_client(budget, manifest.controls, transport=transport, sleep=sleep)
+    profiles, sources, bindings = {}, {}, []
+    attempted = 0
+    stop = "ENRICHMENT_COMPLETE"
+    try:
+        for row in reference.rows:
+            if not potentially_supported(row):
+                continue
+            budget.remaining()
+            key = row["ticker"]
+            mapping = mappings.get(key)
+            symbol = mapping.get("provider_symbol") if isinstance(mapping, dict) else None
+            # An unverified exact symbol is only a diagnostic profile lookup;
+            # classify_population still requires corroborated identity evidence.
+            symbol = symbol or key
+            try:
+                attempted += 1
+                profile = yahoo.profile(symbol)
+                venues = {
+                    "NMS": "XNAS",
+                    "NGM": "XNAS",
+                    "NCM": "XNAS",
+                    "NYQ": "XNYS",
+                    "ASE": "XASE",
+                    "PCX": "ARCX",
+                    "BTS": "BATS",
+                }
+                profile["identity_unverified"] = any(
+                    profile[k] is None for k in ("currency", "quoteType", "exchange")
+                )
+                profile["conflicting"] = not profile["identity_unverified"] and (
+                    profile["currency"] != "USD"
+                    or profile["quoteType"] != "EQUITY"
+                    or venues.get(profile["exchange"]) != row.get("primary_exchange")
+                )
+                profile["retrieved_at"] = now()
+                source_path, sha = private_json(
+                    output,
+                    f"profile-{len(sources):06d}.json",
+                    {**profile, "retrieved_at": profile["retrieved_at"].isoformat()},
+                )
+                profiles[key] = profile
+                account = next(
+                    r.account_scope_sha256 for r in manifest.rights if r.provider == "yfinance"
+                )
+                sources[key] = {
+                    "provider": "yfinance",
+                    "provider_symbol": profile["symbol"],
+                    "retrieved_at": profile["retrieved_at"].isoformat(),
+                    "reference": str(source_path.resolve()),
+                    "sha256": sha,
+                }
+                bindings.append(
+                    SourceBinding(
+                        provider="yfinance",
+                        dataset="classification",
+                        source_sha256=sha,
+                        account_scope_sha256=account,
+                    )
+                )
+            except OSError:
+                stop = "LOCAL_EVIDENCE_WRITE_FAILED"
+                break
+            except Exception as exc:
+                from stock_analyser.qualification_budget import QualificationStop
+
+                if isinstance(exc, QualificationStop) and exc.code in ("DEADLINE", "REQUEST_LIMIT"):
+                    stop = exc.code
+                    break
+                # No upstream text or per-symbol failures enter aggregate evidence.
+                continue
+    except KeyboardInterrupt:
+        stop = "INTERRUPTED"
+    except Exception:
+        stop = budget.stop_reason or "ENRICHMENT_STOPPED"
+    finally:
+        yahoo.close()
+    finished = now()
+    if stop == "ENRICHMENT_COMPLETE" and len(profiles) < sum(
+        potentially_supported(r) for r in reference.rows
+    ):
+        stop = "ENRICHMENT_PARTIAL"
+    from stock_analyser.qualification import ProfileMeasurements
+
+    coverage = classify_population(reference.rows, mappings, profiles, now=finished)
+    coverage = coverage.model_copy(
+        update={
+            "profile_measurements": ProfileMeasurements(
+                attempted=attempted,
+                succeeded=len(profiles),
+                failed=attempted - len(profiles),
+                not_attempted=coverage.potentially_supported - attempted,
+            )
+        }
+    )
+    private_json(
+        output,
+        "population.json",
+        {
+            "version": "qualified-enrichment-1",
+            "reference": detail["reference"],
+            "discovery": detail["discovery"],
+            "profiles": {
+                k: {**p, "retrieved_at": p["retrieved_at"].isoformat()} for k, p in profiles.items()
+            },
+            "mappings": json.loads(mappings_path.read_text()),
+            "profile_sources": sources,
+            "reference_source": detail["reference_source"],
+        },
+    )
+    updated = manifest
+    if not any(
+        (
+            coverage.unknown,
+            coverage.conflicting,
+            coverage.unmatched,
+            coverage.ambiguous,
+            coverage.identity_conflicts,
+        )
+    ):
+        updated = planned_manifest(inventories, manifest, classification=coverage)
+    with (output / "enrichment-workload.json").open("x", encoding="utf-8") as stream:
+        stream.write(
+            updated.model_copy(
+                update={"source_bindings": (*manifest.source_bindings, *bindings)}
+            ).model_dump_json(indent=2)
+            + "\n"
+        )
+    b = budget_evidence(manifest, budget, stop).model_copy(
+        update={
+            "elapsed_seconds": (finished - started).total_seconds(),
+            "inventory_complete_for_estimate": True,
+        }
+    )
+    report = report_for(
+        manifest,
+        started=started,
+        finished=finished,
+        origin="live",
+        inventories=inventories,
+        coverage=coverage,
+        history=empty_history(coverage.distinct_technology_securities),
+        budget=b,
     )
     return write_report(output, report, now=now(), _reserved=True)
 
@@ -570,9 +996,9 @@ def execute_population(
 ):
     """Measure an explicitly reviewed, rights-permitted local population export.
 
-    Live Yahoo collection is unavailable until HTTP amplification and account
-    permissions are established. This path permits a complete stable-ID export
-    without buying a source or retaining vendor details in aggregate evidence.
+    The bounded native metadata stages may supply these inputs. Price selection
+    uses the existing retained-history contracts. Current account rights must pass
+    before any detailed data is read or any provider collection is dispatched.
     """
     import json
 
@@ -613,6 +1039,16 @@ def execute_population(
         or digest([i.model_dump(mode="json") for i in inventories]) != manifest.inventory_sha256
     ):
         raise ValueError("Complete inventories differ from reviewed population plan")
+    calculated = calculate_population_plan(
+        inventories,
+        manifest.controls,
+        manifest.population_plan.classification if manifest.population_plan is not None else None,
+    )
+    if (
+        manifest.population_plan != calculated
+        or manifest.estimated_http_upper_bound != calculated.total_http_upper
+    ):
+        raise ValueError("Execution requires the calculated reviewed population plan")
     rows = [c.reference.model_dump() for c in snapshot.request.population.candidates]
     reference = next(i for i in inventories if i.source == "massive")
     if len(rows) != manifest.reference_count or len(rows) != reference.unique_rows:

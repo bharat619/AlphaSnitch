@@ -35,6 +35,10 @@ class MassiveError(ValueError):
     """Safe public error; never includes upstream content or request details."""
 
 
+class MassivePageLimitError(MassiveError):
+    code = "PAGE_LIMIT"
+
+
 class ProviderCooldownError(MassiveError):
     """The shared allowance stopped this run to honor a provider cooldown."""
 
@@ -308,6 +312,7 @@ class MassiveClient:
         transport: Transport = https_transport,
         *,
         budget=None,
+        max_pages_per_operation=None,
     ):
         if not key.get_secret_value().strip():
             raise MassiveError("Set MASSIVE_API_KEY before live collection")
@@ -316,6 +321,9 @@ class MassiveClient:
         self.settings = settings
         self.transport = transport
         self.budget = budget
+        if max_pages_per_operation is not None and not 1 <= max_pages_per_operation <= 100:
+            raise ValueError("Invalid page cap")
+        self.max_pages_per_operation = max_pages_per_operation
         self._requests = 0
         self._mutex = threading.Lock()
         self.observations: list[dict] = []
@@ -413,6 +421,7 @@ class MassiveClient:
     def pages(self, path: str, query: dict) -> Iterator[dict]:
         target = path + "?" + urlencode(query)
         seen = set()
+        page_count = 0
         # Aggregate next pages may change the start/end portion of the path.
         prefix = path.split("/range/")[0] + "/range/1/day/" if "/range/" in path else None
         while True:
@@ -420,10 +429,17 @@ class MassiveClient:
                 raise MassiveError("Massive pagination cycle")
             seen.add(target)
             payload = self.request(target)
+            page_count += 1
             yield payload
             next_url = payload.get("next_url")
             if next_url is None:
                 return
+            if (
+                path != "/v3/reference/tickers"
+                and self.max_pages_per_operation is not None
+                and page_count >= self.max_pages_per_operation
+            ):
+                raise MassivePageLimitError("Massive operation page cap exhausted")
             try:
                 url = urlsplit(next_url)
                 if (
@@ -668,10 +684,17 @@ class MassiveActionsProvider:
 
 @contextmanager
 def live_client(
-    key: SecretStr, settings: MassiveSettings, lock_path: Path, *, budget=None
+    key: SecretStr,
+    settings: MassiveSettings,
+    lock_path: Path,
+    *,
+    budget=None,
+    max_pages_per_operation=None,
 ) -> Iterator[MassiveClient]:
     with ProviderAllowance(lock_path, settings.requests_per_minute) as allowance:
-        yield MassiveClient(key, allowance, settings, budget=budget)
+        yield MassiveClient(
+            key, allowance, settings, budget=budget, max_pages_per_operation=max_pages_per_operation
+        )
 
 
 class MassiveEvidenceProvider:

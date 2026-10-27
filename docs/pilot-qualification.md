@@ -1,328 +1,299 @@
 # Pilot qualification (US-019)
 
-Pilot acceptance remains **FAIL**. No account-specific confirmation is available
-for Massive or Yahoo (operator confirmation, 2026-10-27). Rights are **UNKNOWN**;
-affected live collection is blocked. No subscription purchase or upgrade is
-permitted by this workflow. The October 24 observations remain unchanged.
+Current criteria: `us-technology-qualification-3`; aggregate report schema: `2`.
+The workflow implements bounded native inventories, complete-reference Yahoo
+profile acquisition, automatically calculated workload plans, and qualification
+of retained selection/benchmark evidence. **Pilot acceptance remains FAIL**.
+The operator confirmed no account-specific permissions for Massive or Yahoo.
+All nine required rights dispositions remain UNKNOWN, so affected live operations
+are blocked. No purchase, subscription change or live collection was performed.
 
-## Evidence and acceptance
+## Stages and reproduction
 
-`qualification.py` defines schema `2` and criteria
-`us-technology-qualification-2`. Every mandatory gate is recomputed using an
-injected clock. The criteria freeze the existing US Technology policy, selection
-policy, exact 60 completed-session raw close × raw share-volume arithmetic,
-USD 5 price and USD 10 million mean traded-value boundaries, ten selections, and
-at least 260 completed daily bars. Independent mandatory history requirements
-remain part of `SelectionPolicy.requirements()` and its hash. The initial
-qualification criteria use the default selection policy (no additional weekly
-feature is configured). A different mandatory history configuration requires
-explicitly supported criteria; supplying a different policy cannot silently pass.
-
-Reports partition reference listings into explicit measured exclusions and
-potentially supported listings. Missing identities or metadata stay visible.
-Classification covers every potentially supported reference listing, including
-Technology securities absent from discovery. Stable share-class and listing
-identifiers require matching venue, currency, type and effective interval.
-Punctuation and rename fallbacks require an explicit dated corroborated mapping;
-symbol equality and names do not establish identity. Distinct share classes stay
-separate. Duplicate listings and sector/identity conflicts remain accounted for.
-
-Local population execution reopens selection input files through the existing
-`replay_universe` evaluator, including independently resolved daily/weekly windows,
-feed/identity/adjustment checks and exact liquidity arithmetic. Price/liquidity
-exclusions are separate from invalid or missing mandatory histories. SPY benchmark
-history is verified independently when supplied. Missing benchmark evidence blocks
-acceptance. Complete selection alone cannot prove benchmark or cold/warm workload
-coverage.
-
-The report separately records source/implementation/lock hashes, criteria/policy/
-history hashes, provenance, query scope, page hashes/times/counts, denominators,
-SDK versus HTTP counts, ceilings, scheduled cooldown totals, measured versus
-estimated work, rights and derived gate reasons. Implementation and lock hashes
-must match supported code when a report is consumed. Metadata expires after 24
-hours; rights evidence expires after 30 days or its earlier explicit expiry.
-Future, stale, unsupported, inconsistent or conflicting evidence fails closed.
-Historical schema 1 observations remain readable JSON but cannot qualify schema 2.
-Synthetic evidence can pass the evaluator in fixture mode; it cannot pass a live
-release. A stored summary PASS is never sufficient.
-
-Only aggregate counts, fixed source/query names, stable reason codes, timestamps
-and allowlisted hashes enter `findings.json`. Raw rows, histories, mappings,
-credentials, provider request URLs, upstream errors and cursors do not. Local
-export inputs stay outside committed evidence and need retention rights. Hashes
-cannot reconstruct the discarded population: aggregate reports do **not** provide
-full detailed replay without those separately retained, rights-permitted files.
-An aggregate report is an observation, not a signed attestation against a malicious
-author fabricating all its underlying measurements.
-
-## Offline planning and reviewed stages
-
-Use a **new** directory for every observation:
+Use a new output directory for every command. Existing directories are refused
+before provider activity. Planning is offline: no credentials, provider clients
+or raw vendor data acquisition are needed.
 
 ```sh
-uv run --locked stock-analyser qualify-universe \
-  --mode plan --output /private/tmp/us019-plan-001 --max-pages 2
-shasum -a 256 /private/tmp/us019-plan-001/workload.json
+uv run --locked stock-analyser qualify-universe --mode plan \
+  --max-pages 2 --output /private/tmp/us019-inventory-plan
 ```
 
-This command loads no credentials and makes no provider calls. It writes schema 2
-`findings.json` and a proposed `workload.json`, and exits 1 while blocked. The
-initial reviewed inventory bounds are two pages per source, ten total HTTP
-attempts (six Massive, four Yahoo), one worker and 180 seconds. These are caps,
-not estimates of the full population. The proposed manifest carries UNKNOWN
-rights and cannot authorize collection. `--profile-limit` is retained only to
-reject nonzero historical sample controls.
+This writes `findings.json` and a proposed `workload.json`. The default reviewed
+inventory caps remain two pages per source, ten total HTTP attempts (six Massive,
+four Yahoo), 180 seconds and one worker. UNKNOWN rights produce a zero-dispatch
+FAIL. These caps are not a population estimate. A proposed manifest is not a
+rights grant. Nonzero historical `--profile-limit` samples are rejected.
 
-After independently resolving rights and reviewing the exact manifest bytes, the
-explicit inventory contract is:
+After rights and the exact manifest have been independently reviewed, the
+inventory contract is:
 
 ```sh
 uv run --locked stock-analyser qualify-universe --mode inventory \
-  --manifest /absolute/path/to/reviewed-workload.json \
-  --manifest-sha256 EXACT_FILE_SHA256 --output /private/tmp/us019-inventory-001
+  --manifest /absolute/path/to/reviewed-inventory-workload.json \
+  --manifest-sha256 EXACT_FILE_SHA256 --output /private/tmp/us019-inventory
 ```
 
-Do **not** run this with current UNKNOWN rights expecting collection. Preflight
-writes a zero-dispatch failure observation instead. With sufficient rights,
-Massive enumeration uses the existing shared persistent allowance and credentials;
-all workers/retries share one request/deadline budget. Timeout and pacing waits
-are clamped to remaining time. Provider cooldown is preserved even when it cannot
-fit the deadline. Pagination rejects duplicate/malformed rows, page count mismatch,
-empty nonterminal pages, unsafe/repeated cursors and provider failures. Massive's
-`count` is a per-request result count, not a population total. Completeness uses
-its terminal page. Yahoo discovery uses a stable reported total, start and count.
-Retrieval windows do not prove transactional snapshot consistency.
+With current UNKNOWN rights it writes blocked evidence and makes no provider
+calls. With sufficient rights it enumerates Massive active US stocks and Yahoo
+US Technology discovery using the existing checked enumerators. Complete queries
+produce `population-workload.json` automatically. Truncation, inconsistent totals,
+duplicates, malformed pages, errors or an exhausted budget preserve partial
+findings and cannot produce a complete-population plan.
 
-The installed Yahoo SDK's authentication/internal retries do not provide a
-verified HTTP amplification ceiling. The live Yahoo adapter therefore does not
-dispatch broad collection; the report records HTTP counts as unknown. A deadline
-is not an HTTP cap. No background worker is spawned. Handled enumeration errors,
-budget stops and KeyboardInterrupt retain sanitized partial evidence. SIGKILL,
-process crash, disk/setup failure or interruption during final publication may
-leave no final report; use a new directory. Final JSON is flushed and atomically
-linked without replacing an existing file. Existing inventory output directories
-are refused before network dispatch.
+Rights-permitted details are stored under `private/`, with a private directory
+and immutable files. They include projected reference rows, private inventory
+state and actual HTTP counters. Only the allowlisted aggregate `findings.json`
+and aggregate workload plans belong in committed observations. Never commit
+`private/`, mappings, cookies, tokens, price histories or local population exports.
 
-A complete permitted export is the supported fallback for population-dependent
-classification/mapping/history evaluation. `population_manifest()` refuses
-incomplete inventories as an upper bound. A reviewed population manifest binds
-canonical schema-2 inventory hashes, reference count, an independently established
-HTTP upper bound, per-source/overall ceilings and the exact local input file hash.
-No multiplication of sampled counts is treated as an upper bound.
+Review the calculated population plan and bind the exact dated mappings:
 
 ```sh
-uv run --locked stock-analyser qualify-universe --mode execute \
-  --manifest /absolute/path/to/reviewed-population-workload.json \
-  --manifest-sha256 EXACT_FILE_SHA256 \
-  --population-inputs /absolute/path/to/rights-permitted-local-export.json \
-  --output /private/tmp/us019-population-001
+uv run --locked stock-analyser qualify-universe --mode plan \
+  --manifest /private/tmp/us019-inventory/population-workload.json \
+  --identity-mappings /absolute/path/to/permitted-mappings.json \
+  --output /private/tmp/us019-population-plan
 ```
 
-For live imports, the reviewed manifest must additionally contain `source_bindings`.
-Each binding has `provider`, `dataset`, the retained source bytes' `source_sha256`,
-and `account_scope_sha256`. Execution reopens those source bytes, verifies their
-hash, and matches all three collect/retain/derive permissions to that exact
-provider/dataset/account. Reference provenance must be Massive, classification
-provenance yfinance, and candidate/benchmark price provenance Massive under the
-current criteria. Additional providers require supported criteria and rights;
-provider capabilities or a publication flag cannot substitute. Fixture providers,
-synthetic/discovery feeds and unmaintained live calendars are rejected independently.
-The aggregate `provenance` contains only provider/dataset/account hashes, source
-counts and source-set hashes.
+Alternatively, `--inventory-evidence /path/to/findings.json` calculates a new plan
+from fresh, complete, compatible aggregate inventories without reading raw rows.
+`--inventory-inputs` can bind the exact private inventory file hash. No external
+population upper-bound number needs to be invented or supplied.
 
-History and benchmark windows are independently recomputed with the maintained
-calendar adapter at the qualification as-of instant. Every daily and mandatory
-weekly period, calendar version and adjustment requirement must match. A matching
-old replay is insufficient. Same-window reuse over weekends is allowed. Synthetic
-export evaluation requires an explicitly injected test resolver, which live
-execution rejects. Aggregate history records the qualification as-of and a hash
-of both independently resolved candidate and benchmark windows.
+The bounded enrichment contract is:
 
-The local export has exactly these fields:
+```sh
+uv run --locked stock-analyser qualify-universe --mode enrich \
+  --manifest /private/tmp/us019-population-plan/workload.json \
+  --manifest-sha256 EXACT_FILE_SHA256 \
+  --inventory-inputs /private/tmp/us019-inventory/private/inventory.json \
+  --identity-mappings /absolute/path/to/permitted-mappings.json \
+  --output /private/tmp/us019-enrichment
+```
 
-- `origin`: `live` or `synthetic`; synthetic publication/calendar evidence cannot
-  be relabeled live.
-- `started_at`, `finished_at`: acquisition timestamps, distinct from evaluation time.
-- `snapshot`: existing `UniverseSnapshot` including retained local history references.
-- `inventories`: two `InventoryEvidence` objects; reference page hashes must cover
-  the exact snapshot reference population in original provider order.
-- `mappings`: per-reference-ticker stable IDs or dated corroborated mappings with
-  venue/currency/type, provider symbol and evidence reference hash.
-- `profiles`: per-reference-ticker symbol, sector, retrieval timestamp and optional
-  conflict indication. They must agree with selection's classification inputs.
-- `budget`: `BudgetEvidence` for actual acquisition, including cold/warm work,
-  actual HTTP attempts, SDK calls, retries, scheduled cooldown, elapsed duration
-  and conservative upper bound. Unknown amplification cannot pass.
-- `benchmark`: separate `UniverseSnapshot` containing SPY's independently resolved
-  history, or `null` (which keeps history qualification blocked).
+Every potentially supported reference listing is visited, including listings
+absent from discovery. Explicit unsupported types/venues/currencies are measured
+exclusions; unknown metadata/identities stay in the denominator. Missing mappings
+allow only a diagnostic exact-symbol lookup: the profile cannot establish verified
+identity or Technology membership. Symbol equality, punctuation changes or company
+names never manufacture a mapping. Returned symbols are preserved and checked.
+Actual exchange/currency/security-type contradictions remain conflicts; missing
+metadata remains unknown. One provider symbol cannot identify two distinct share
+classes/listings at the same effective date. Mapping dates use the US market day.
 
-No live population acquisition is implemented through an unbounded SDK fallback.
-The source/export must provide actual workload evidence; local evaluation does not
-pretend its own execution time measures collection. See the tested local export
-construction in `tests/test_qualification.py` for the exact contracts. Rights are
-checked before reading local detailed inputs. Absent rights or incomplete budgets
-produce a blocked observation. Invalid input hashes/schema are sanitized setup
-errors and do not cause provider calls.
+Enrichment emits sanitized findings, retained private profiles/source references,
+and `enrichment-workload.json`. Once every required classification and identity is
+resolved, it automatically recalculates history costs using the measured distinct
+Technology population. Unknown/conflicting/failed/unattempted members prevent this
+refinement. Reviewed ceilings are never raised automatically. Metadata enrichment
+may run within its separately calculated prefix budget; history remains prohibited
+until its full refined plan fits the reviewed limits.
 
-## Source feasibility and permissions needed
+Final qualification consumes the existing immutable `UniverseSnapshot` format and
+retained completed-history evidence, plus independent SPY benchmark and actual
+cold/warm measurements. These are supplied using the existing selection/collection
+contracts; metadata enrichment alone does not claim to have collected prices.
 
-Reviewed official sources on 2026-10-27:
+```sh
+uv run --locked stock-analyser qualify-universe --mode plan \
+  --manifest /private/tmp/us019-enrichment/enrichment-workload.json \
+  --population-inputs /absolute/path/to/permitted-complete-export.json \
+  --output /private/tmp/us019-execution-plan
+uv run --locked stock-analyser qualify-universe --mode execute \
+  --manifest /private/tmp/us019-execution-plan/workload.json \
+  --manifest-sha256 EXACT_FILE_SHA256 \
+  --population-inputs /absolute/path/to/permitted-complete-export.json \
+  --output /private/tmp/us019-qualified
+```
 
-- [Massive All Tickers](https://massive.com/docs/rest/stocks/tickers/all-tickers)
-  documents pagination, identifiers and per-request count. Query completion does
-  not establish Yahoo classification or account rights.
-- [Massive Market Data Terms](https://massive.com/legal/market-data-terms-of-service),
-  last updated August 28, 2025, constrain personal/non-business use and describe
-  additional dataset entitlements and display-only restrictions unless superseded.
-  These terms do not establish permission for this account's retained derivation
-  workflow. Account/product entitlement and any superseding agreement are unknown.
-- [yfinance official documentation](https://ranaroussi.github.io/yfinance/)
-  directs users to Yahoo's data terms and identifies personal-use scope.
-  The software license is not a data-retention grant.
-- [Yahoo terms](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html) could not
-  be retrieved by the documentation reader during this review. Applicable local
-  account terms, automated-access permissions and retention rights remain unknown.
+The local export has exactly `origin`, `started_at`, `finished_at`, `snapshot`,
+`inventories`, `mappings`, `profiles`, `budget`, and `benchmark` (a separate SPY
+snapshot or null). Mappings contain verified stable IDs or explicit dated,
+corroborated mappings with evidence hashes. Profiles must agree with selection's
+classification records. Reference page hashes cover the full frozen reference
+population in provider order. Live source bindings identify each actual source
+hash, provider, dataset and account scope; source bytes are reopened and matched
+to all applicable collect/retain/derive permissions. Retained benchmark prices are
+checked independently. Unknown/prohibited/expired/wrong-scope rights block reads
+of detailed inputs as well as native acquisition.
 
-To unblock, obtain official applicable terms or written provider confirmation
-identifying the account/product, datasets and permitted operations, specifically:
+## Enforced transport and calculated bounds
 
-1. Massive active US reference inventory collection and retention of listing and
-   share-class IDs/metadata for reproducible internal universe snapshots.
-2. Yahoo automated classification/profile acquisition across the entire supported
-   population, verified cross-provider mappings, taxonomy/as-of evidence, and
-   retention of those inputs. Alternatively, obtain a complete classification
-   export with stable IDs, taxonomy, as-of and explicit permitted retention/use.
-3. Massive unadjusted historical price/share-volume collection and retained daily
-   and mandatory weekly snapshots, benchmark work, liquidity derivation and
-   intended internal use. Confirm feed/venue coverage and publication support.
-4. For each operation: source/version/date, review date and expiry, applicable
-   account/product scope, permitted retention duration (the current intended
-   local replay period is 365 days), use restrictions and no unresolved conditions.
-   Record document bytes' SHA-256 or a written-confirmation reference. A boolean
-   approval, working API key or subscription tier alone is insufficient.
+The qualification Yahoo client uses the narrowly scoped endpoints present in the
+[official yfinance source](https://github.com/ranaroussi/yfinance/blob/0.2.66/yfinance/screener/screener.py)
+and quote adapter. It uses direct HTTPS; its historical application provider key
+remains `yfinance`, but **SDK calls are zero**. Cookie/crumb acquisition, auth
+refresh, retries and failed requests consume the shared HTTP counter. It does not
+invoke the SDK's internal retry/normalization paths. Cookies and crumbs remain
+in memory, not persistent library caches or reports. Redirects and consent flows
+stop with a failure; no automated consent submission or source fallback occurs.
 
-Even resolved rights would leave Yahoo HTTP transport bounds, complete inventory/
-classification/identity, calendar/feed support, all candidate/benchmark histories,
-and measured cold/warm work to verify. No source purchase is implied.
+A logical operation has an explicit HTTP cap (default eight), bounded data retries
+(default one), and the whole client session has at most two authentication attempts
+and one credential-refresh replay. Each authentication attempt has two HTTP calls.
+For O operations, the HTTP upper bound is the smaller of `O * operation_cap` and
+`O * (retries + 1) + 5`; zero operations cost zero. These are enforced counters,
+not an assumed SDK amplification factor. Inventory and enrichment sessions are
+budgeted separately. Native HTTP makes one request per dispatch, never follows
+redirects or retries implicitly, and shares the absolute deadline with DNS, TCP,
+TLS, header reads and body reads. DNS subprocesses are killed/reaped on timeout or
+interruption. No background collection survives a stopped operation.
 
-## Verification and current outcome
+Massive retains its existing persistent shared allowance, credentials and retries.
+Qualification additionally caps every non-reference paginated operation using
+`controls.massive_pages_per_operation`. Inventory pagination has its own explicit
+page cap. Yahoo uses a separate persistent per-user allowance (`yahoo.lock`), with
+at most 60 requests/minute and preserved cooldowns. Workers do not create separate
+allowances; concurrency remains one. No quota or subscription is increased.
+
+The planner requires both complete exact inventories. Initial N is all reference
+rows, including exclusions/unknowns: this supplies a conservative upper bound.
+Let R/D be reference/discovery pages, P the Massive operation page cap, A Massive
+attempts/page (`retries + 1`), H independently configured mandatory history windows,
+and Y(O) the enforced Yahoo bound above:
+
+- Cold Massive: `R*A + (N+1)*H*P*A` (all candidates plus benchmark).
+- Cold Yahoo: `Y(D) + Y(N)` (discovery and complete-reference classifications).
+- Warm metadata-fresh Massive: `(N+1)*H*P*A`; Yahoo zero.
+- Identity resolution uses reviewed local mappings: zero hidden HTTP calls.
+- Once complete classification proves T distinct Technology securities, history
+  terms use T; metadata acquisition remains budgeted across N.
+
+Every input, control, history-requirements hash, phase/source subtotal and overall
+sum is retained. A fresh complete classification proof is required to reduce the
+history population. Metadata-expired refresh needs another cold budget. Network
+wait/transport bounds include pacing, timeouts, bounded retry/cooldown behavior;
+CPU/filesystem time is also measured against the overall deadline. Estimates do
+not assert that a provider can complete inside them: exceeding a cap fails closed.
+
+Stage preflight and report consumption independently recalculate the plan and
+compare its exact values. Altered plans, incomplete inventories, mismatched
+controls, insufficient per-source/overall ceilings, excessive waiting, or stale
+classification cannot authorize broad collection. Inventory counts and elapsed
+review time carry into enrichment accounting. Limits are explicit and configurable
+(up to 100,000 overall attempts and 24 hours); defaults remain unchanged and the
+24-hour metadata freshness policy remains mandatory. Larger limits require review
+of a new exact manifest, not an automatic quota increase.
+
+## Evidence gates and history
+
+Acceptance requires every mandatory gate PASS and no blockers. The evaluator uses
+an injected clock, supported versions and independent policy/criteria/history
+hashes, code/lock compatibility and consistent disjoint denominators. A supplied
+summary PASS never grants acceptance. Metadata expires after 24 hours; rights
+review after 30 days or its earlier expiry. Synthetic fixtures cannot qualify a
+live release. Historical criteria remain readable observations, never upgraded.
+
+Daily and configured mandatory weekly windows are independently recomputed at
+qualification as-of using maintained calendars. Every completed period, cutoff,
+calendar-data version and adjustment requirement must match. Same-window weekend
+reuse is valid; replaying an old snapshot at a new date is insufficient. Fixture
+providers, synthetic/discovery feeds and unmaintained live calendars are rejected
+independently of publication flags. Synthetic exports require an explicit injected
+test resolver, which live qualification rejects.
+
+The existing evaluator preserves at least 260 completed daily bars and every
+configured mandatory minimum/warmup, exactly 60 completed regular sessions of raw
+close × raw share volume, USD 5 minimum price and USD 10 million mean traded value,
+with exact arithmetic and inclusive boundaries. Current criteria have no extra
+mandatory weekly feature configured; configuring one requires supported criteria.
+Missing/invalid retrieval is separate from measured low-price/liquidity exclusion.
+Candidate shortfall and incomplete candidate/benchmark coverage remain blockers.
+
+Only aggregates, fixed query/source IDs, timestamps, stable reason codes, hashes
+and approved workload metadata enter findings. Hashes cannot reconstruct discarded
+provider populations. Detailed replay requires separately retained, rights-permitted
+files. Reports are observations, not signed attestations against a malicious author
+fabricating source measurements. Handled interruption/budget/provider failures
+preserve partial findings; SIGKILL, process/disk failure or failure during publication
+may leave no final file. Output JSON is published atomically without overwrite.
+
+## Permissions and remaining live evidence
+
+The operator's 2026-10-27 confirmation remains authoritative: no account-specific
+confirmation exists for either provider. To unblock, obtain applicable official
+terms or written confirmation covering each account/product and dataset:
+
+1. Massive active US reference inventory collection, metadata/identifier retention
+   and internal derivation.
+2. Yahoo automated API classification acquisition, verified cross-provider mappings,
+   taxonomy/as-of evidence, retention and internal derivation. A complete permitted
+   classification export with stable identifiers is an alternative data input.
+3. Massive raw and mandatory adjusted daily/weekly histories and SPY benchmark,
+   retained reproducible snapshots and internal liquidity derivation.
+
+Each operation needs source/version/date and document hash or written-confirmation
+reference, review/expiry dates, exact account/product scope, retention duration
+(current intended replay period: 365 days), permitted use and no unresolved
+conditions. Working API access and software licenses are not rights evidence.
+Also required before pilot PASS: complete live inventories, classifications and
+mappings, supported calendars/feeds/publication evidence, actual candidate and
+benchmark coverage, and measured cold/warm workload within reviewed limits.
+
+Official sources reviewed on 2026-10-27:
+[Massive All Tickers](https://massive.com/docs/rest/stocks/tickers/all-tickers),
+[Massive Market Data Terms](https://massive.com/legal/market-data-terms-of-service)
+(last updated August 28, 2025),
+[yfinance documentation](https://ranaroussi.github.io/yfinance/), and
+[Yahoo terms](https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html).
+Yahoo terms could not be retrieved by the documentation reader. Applicable
+account entitlements, automated access and retention/derivation permission remain
+UNKNOWN. No source purchase is implied.
+
+## Verification and immutable observations
 
 ```sh
 uv sync --locked
-uv run --locked pytest -q tests/test_qualification.py tests/test_universe_spike.py \
-  tests/test_universe.py tests/test_release_checklist.py tests/test_calendars.py \
-  tests/test_massive.py tests/test_price_routing.py
+uv run --locked pytest -q tests/test_qualification_collection.py tests/test_qualification.py \
+  tests/test_universe_spike.py tests/test_universe.py tests/test_release_checklist.py \
+  tests/test_calendars.py tests/test_massive.py tests/test_price_routing.py
 uv run --locked ruff check src tests scripts
 uv run --locked ruff format --check src tests scripts
-# Disposable server only; do not use the application database.
-STOCK_ANALYSER_TEST_DATABASE_URL=postgresql+psycopg://stock_analyser:local-test-password@127.0.0.1:55437/stock_analyser \
-  uv run --locked python scripts/foundation_release.py \
-  --output /private/tmp/alphasnitch-us019-release-001 \
-  --qualification-evidence docs/evidence/pilot-qualification-preflight-2026-10-27.json
 ```
 
-Run-wide `ruff check .` additionally includes unrelated untracked `evaluation/`
-files in this workspace; those existing files have lint failures and are excluded
-from the implementation's tracked-code check. No live collection belongs to the
-unit suite or fixture release checklist.
-
-The final full offline checklist completed with **534 passed, zero failures/errors/
-skips**, all 534 expected test IDs reconciled, and the mandatory fresh-process
-checklist PASS. The actual final command used the URL above and output directory
-`/private/tmp/alphasnitch-us019-release-003`. The first sandboxed attempt could not
-connect to the local test server (85 setup errors); the authorized rerun with local
-network access passed. The application database was not used. `uv sync --locked`
-succeeded. Scoped Ruff checks passed; the 57 unrelated untracked-file lint issues
-remain outside this change.
-
-Retained observations:
-
-- [Preflight](evidence/pilot-qualification-preflight-2026-10-27.json), SHA-256
-  `d947a0131e27e518f1230284f5e3f9b0fb1425b7350bbfbf6bf57637aadad0ab`.
-  Massive dispatched requests: 0; Yahoo SDK calls: 0; Yahoo HTTP amplification
-  qualification: unknown; history requests: none. There was no live collection.
-  Proposed caps were 10 overall requests, 6 Massive/4 Yahoo, two pages per source,
-  180 seconds and one worker. Cold/warm measurements were not performed.
-- [Full release result](evidence/foundation-qualification-release-2026-10-27.json)
-  and [fresh-process reopen result](evidence/foundation-qualification-reopen-2026-10-27.json).
-  These were produced from the working feature branch; the source was marked dirty
-  and qualification records its exact implementation hashes. This is not a new
-  clean-checkout installation claim.
-
-At observation time, **contract and freshness PASS**. **Inventory, classification,
-identity, history/liquidity, rights, workload and live origin FAIL**. Rights remain
-UNKNOWN for collection, retention and internal derivation across both providers'
-applicable datasets. The concrete blockers are the missing permissions listed
-above, unbounded Yahoo HTTP amplification, incomplete population inventories,
-classification/mappings, candidate and benchmark histories, venue/feed validation,
-and unmeasured cold/warm work. The release smoke was NOT_RUN and the milestone
-remains incomplete. This verifies the blocked preflight/evidence path; it does not establish completion
-of issue #38 or qualify the pilot. The original 534-test run missed the three
-correctness cases described below. Freshness and compatibility are recomputed whenever evidence
-is consumed, so these stored results are not perpetual acceptance.
-
-
-## Review corrections to f3438d5
-
-The review reproducer demonstrated that criteria v1 accepted an old October 16
-selection window in an October 27 report, and could accept fixture-us data as live
-under unrelated Massive/Yahoo permissions. The original tests did not cover those
-cases. Criteria v2 adds current-window evidence and an independent provenance gate;
-execution performs the calendar and retained-source/account checks described above.
-Earlier observations are immutable historical records and cannot qualify the
-new criteria. No existing October 24 or October 27 observation was rewritten.
-
-The Massive transport now starts one absolute deadline before DNS/TCP/TLS. The
-client passes its remaining run deadline directly to the native transport. The
-same deadline bounds each address attempt, TLS handshake, request send, every
-underlying header read and every body read; it is never restarted after headers.
-A short-lived isolated DNS resolver is killed and reaped by `subprocess.run` if it
-exceeds the remaining deadline or execution is interrupted, preventing an
-uninterruptible C-library lookup from escaping the socket time limit. No resolver
-worker survives completion. Credential values are not passed in resolver arguments.
-Regression tests simulate the original 18-second request and stop it at ten seconds,
-plus slow header dribbles, TLS, DNS and multiple-address failure cases. No live
-provider access is needed by these tests.
-
-**Issue #38 remains operationally incomplete.** The committed observations are
-preflight-only, native Yahoo population collection is unavailable, and the planner
-still requires an externally reviewed population upper bound rather than deriving
-a complete bound itself. Those are remaining delivery gaps. UNKNOWN account rights
-are a separate external blocker; resolving them would not by itself complete the
-missing source adapter or planner. Neither the initial fixture pass nor these
-correctness repairs should be described as completion of the issue.
-
-
-Review-fix validation: **267 focused tests passed** and the full disposable-PostgreSQL
-checklist recorded **553 passed, zero failures/errors/skips**, exact suite
-reconciliation and mandatory fresh-process reopen PASS. Scoped Ruff lint/format
-checks and `git diff --check` passed. The supplied
-`/private/tmp/us019_review_repro.py` now rejects its live fixture export instead
-of producing PASS. Repository regressions separately test maintained-calendar
-staleness, stale benchmark windows, observed-but-fixture provenance, wrong/missing
-account bindings and the original end-to-end export shape. A complete synthetic
-population with a benchmark still passes fixture evaluation and cannot pass a live
-release.
-
-New immutable [review preflight observation](evidence/pilot-qualification-review-2026-10-27.json),
-SHA-256 `72dfb70853a69dc82c3199a0ceb06c79920ea8b122713732f9ddc471b22aee30`,
-records zero Massive dispatches and zero Yahoo SDK calls, UNKNOWN rights, contract/
-freshness PASS and inventory/classification/identity/history/rights/provenance/
-workload/live-origin FAIL. No live provider calls were performed. All eight
-previously committed evidence artifacts are unchanged.
-
-The [review release result](evidence/foundation-qualification-review-release-2026-10-27.json)
-and [review reopen evidence](evidence/foundation-qualification-review-reopen-2026-10-27.json)
-were produced with:
+Repository-wide Ruff also sees existing unrelated untracked `evaluation/` files
+with lint failures; those files are preserved outside this change. Full fixture
+acceptance uses a separate disposable PostgreSQL server, never the application DB:
 
 ```sh
 STOCK_ANALYSER_TEST_DATABASE_URL=postgresql+psycopg://stock_analyser:local-test-password@127.0.0.1:55437/stock_analyser \
   uv run --locked python scripts/foundation_release.py \
-  --output /private/tmp/alphasnitch-us019-review-release-001 \
-  --qualification-evidence docs/evidence/pilot-qualification-review-2026-10-27.json
+  --output /private/tmp/alphasnitch-us019-native-release-003 \
+  --qualification-evidence docs/evidence/pilot-qualification-native-final-preflight-2026-10-27.json
 ```
 
-Use a new output directory when reproducing. The source was the working feature
-branch with review fixes (marked dirty); qualification records its exact source
-implementation hash. This is fixture acceptance, not live or clean-checkout
-qualification. Provider rights and all remaining operational gaps stay blocked.
+All earlier evidence remains unchanged. The initial f3438d5 run recorded 534
+fixtures but missed stale-history, fixture-provenance and deadline failures.
+The 98957ff repair recorded 553 passing fixtures and separate immutable
+[review preflight](evidence/pilot-qualification-review-2026-10-27.json),
+[release](evidence/foundation-qualification-review-release-2026-10-27.json) and
+[reopen](evidence/foundation-qualification-review-reopen-2026-10-27.json) observations.
+Its statement that native Yahoo collection and calculated planning were incomplete
+was accurate then; those code paths are implemented by the current follow-up.
+No previous preflight sample is reinterpreted as live qualification.
+
+
+Current verification: **584 full fixture tests passed**, with zero failures/errors/
+skips, exact suite reconciliation and mandatory fresh-process reopen PASS. The
+actual full run used `/private/tmp/alphasnitch-us019-native-release-002`. After that
+run, the final profile endpoint was aligned with the locked source (`query2` for
+quoteSummary; `query1` for screener/crumb). **All 298 focused tests passed again**,
+including explicit endpoint routing checks. Tracked-code Ruff lint/format and
+`git diff --check` passed. The source was the working feature branch, marked dirty;
+this is not a clean-checkout or live-provider qualification claim.
+
+The [full checklist](evidence/foundation-qualification-native-release-2026-10-27.json)
+and [reopen evidence](evidence/foundation-qualification-native-reopen-2026-10-27.json)
+retain the actual full-run results and its
+[preflight observation](evidence/pilot-qualification-native-preflight-2026-10-27.json).
+The separately captured
+[final preflight](evidence/pilot-qualification-native-final-preflight-2026-10-27.json)
+and [current gate recomputation](evidence/qualification-native-final-gate-2026-10-27.json)
+record the final implementation hash and reference the fixture evidence exactly.
+Final preflight SHA-256:
+`6cb875a5e8fb8ed99fa09ff22262b317b44baa1c25b19a909c512591a9e5b9f2`.
+At observation time contract/freshness PASS; inventory, classification, identity,
+history/liquidity, rights, provenance, workload and live-origin FAIL. Massive and
+Yahoo HTTP attempts are both zero. All eleven earlier committed observations are
+unchanged. Live acceptance and the release milestone remain blocked.
