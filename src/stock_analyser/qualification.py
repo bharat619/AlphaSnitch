@@ -38,7 +38,7 @@ SCOPE = digest(
 
 
 class QualificationCriteria(Evidence):
-    version: Literal["us-technology-qualification-1"] = "us-technology-qualification-1"
+    version: Literal["us-technology-qualification-2"] = "us-technology-qualification-2"
     metadata_ttl_hours: Literal[24] = 24
     rights_ttl_days: Literal[30] = 30
     minimum_selected: Literal[10] = 10
@@ -128,6 +128,8 @@ class HistoryEvidence(Evidence):
     reason_counts_overlap: Literal[True] = True
     # These identify local rights-permitted detail; aggregates alone cannot replay selection.
     selection_inputs_sha256: Hash | None = None
+    qualification_as_of: AwareDatetime | None = None
+    expected_windows_sha256: Hash | None = None
     benchmark_measured: bool
     calendars_and_feeds_verified: bool
 
@@ -192,9 +194,18 @@ class DerivedGate(Evidence):
             "rights",
             "workload",
             "origin",
+            "provenance",
         ],
         GateOutcome,
     ]
+
+
+class SourceUse(Evidence):
+    provider: Literal["massive", "yfinance"]
+    dataset: Literal["reference", "classification", "prices"]
+    account_scope_sha256: Hash
+    source_count: Annotated[int, Field(strict=True, gt=0)]
+    source_set_sha256: Hash
 
 
 class QualificationReport(Evidence):
@@ -217,6 +228,7 @@ class QualificationReport(Evidence):
     history: HistoryEvidence
     budget: BudgetEvidence
     rights: tuple[RightEvidence, ...]
+    provenance: tuple[SourceUse, ...] = ()
     # Derived summaries are checked if supplied, never used as authority.
     gate: DerivedGate | None = None
 
@@ -356,6 +368,8 @@ def evaluate_qualification(report, criteria=CRITERIA, *, now: datetime, live=Fal
             sum(h.exclusion_reasons.values()) >= h.measured_excluded
             and all(0 < count <= h.measured_excluded for count in h.exclusion_reasons.values())
         )
+        and h.qualification_as_of == r.as_of
+        and h.expected_windows_sha256 is not None
         and h.benchmark_measured
         and h.calendars_and_feeds_verified,
         "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE",
@@ -376,6 +390,21 @@ def evaluate_qualification(report, criteria=CRITERIA, *, now: datetime, live=Fal
             and x.retention_days >= x.required_retention_days
         )
     gate("rights", valid_rights, "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE")
+    expected_uses = {(p, d) for p, d, _ in criteria.required_rights}
+    actual_uses = {(u.provider, u.dataset) for u in r.provenance}
+    provenance_valid = actual_uses == expected_uses and len(r.provenance) == len(expected_uses)
+    for use in r.provenance:
+        provenance_valid &= all(
+            rights.get((use.provider, use.dataset, operation)) is not None
+            and rights[use.provider, use.dataset, operation].account_scope_sha256
+            == use.account_scope_sha256
+            for operation in ("collect", "retain", "derive_internal")
+        )
+    gate(
+        "provenance",
+        r.origin == "synthetic" or provenance_valid,
+        "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED",
+    )
     b = r.budget
     attempts = list(b.http_attempts.values())
     gate(

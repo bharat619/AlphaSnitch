@@ -8,7 +8,7 @@ permitted by this workflow. The October 24 observations remain unchanged.
 ## Evidence and acceptance
 
 `qualification.py` defines schema `2` and criteria
-`us-technology-qualification-1`. Every mandatory gate is recomputed using an
+`us-technology-qualification-2`. Every mandatory gate is recomputed using an
 injected clock. The criteria freeze the existing US Technology policy, selection
 policy, exact 60 completed-session raw close × raw share-volume arithmetic,
 USD 5 price and USD 10 million mean traded-value boundaries, ten selections, and
@@ -117,6 +117,26 @@ uv run --locked stock-analyser qualify-universe --mode execute \
   --population-inputs /absolute/path/to/rights-permitted-local-export.json \
   --output /private/tmp/us019-population-001
 ```
+
+For live imports, the reviewed manifest must additionally contain `source_bindings`.
+Each binding has `provider`, `dataset`, the retained source bytes' `source_sha256`,
+and `account_scope_sha256`. Execution reopens those source bytes, verifies their
+hash, and matches all three collect/retain/derive permissions to that exact
+provider/dataset/account. Reference provenance must be Massive, classification
+provenance yfinance, and candidate/benchmark price provenance Massive under the
+current criteria. Additional providers require supported criteria and rights;
+provider capabilities or a publication flag cannot substitute. Fixture providers,
+synthetic/discovery feeds and unmaintained live calendars are rejected independently.
+The aggregate `provenance` contains only provider/dataset/account hashes, source
+counts and source-set hashes.
+
+History and benchmark windows are independently recomputed with the maintained
+calendar adapter at the qualification as-of instant. Every daily and mandatory
+weekly period, calendar version and adjustment requirement must match. A matching
+old replay is insufficient. Same-window reuse over weekends is allowed. Synthetic
+export evaluation requires an explicitly injected test resolver, which live
+execution rejects. Aggregate history records the qualification as-of and a hash
+of both independently resolved candidate and benchmark windows.
 
 The local export has exactly these fields:
 
@@ -236,6 +256,73 @@ applicable datasets. The concrete blockers are the missing permissions listed
 above, unbounded Yahoo HTTP amplification, incomplete population inventories,
 classification/mappings, candidate and benchmark histories, venue/feed validation,
 and unmeasured cold/warm work. The release smoke was NOT_RUN and the milestone
-remains incomplete. This verifies the implemented blocked workflow; it does not
-qualify the pilot. Freshness and compatibility are recomputed whenever evidence
+remains incomplete. This verifies the blocked preflight/evidence path; it does not establish completion
+of issue #38 or qualify the pilot. The original 534-test run missed the three
+correctness cases described below. Freshness and compatibility are recomputed whenever evidence
 is consumed, so these stored results are not perpetual acceptance.
+
+
+## Review corrections to f3438d5
+
+The review reproducer demonstrated that criteria v1 accepted an old October 16
+selection window in an October 27 report, and could accept fixture-us data as live
+under unrelated Massive/Yahoo permissions. The original tests did not cover those
+cases. Criteria v2 adds current-window evidence and an independent provenance gate;
+execution performs the calendar and retained-source/account checks described above.
+Earlier observations are immutable historical records and cannot qualify the
+new criteria. No existing October 24 or October 27 observation was rewritten.
+
+The Massive transport now starts one absolute deadline before DNS/TCP/TLS. The
+client passes its remaining run deadline directly to the native transport. The
+same deadline bounds each address attempt, TLS handshake, request send, every
+underlying header read and every body read; it is never restarted after headers.
+A short-lived isolated DNS resolver is killed and reaped by `subprocess.run` if it
+exceeds the remaining deadline or execution is interrupted, preventing an
+uninterruptible C-library lookup from escaping the socket time limit. No resolver
+worker survives completion. Credential values are not passed in resolver arguments.
+Regression tests simulate the original 18-second request and stop it at ten seconds,
+plus slow header dribbles, TLS, DNS and multiple-address failure cases. No live
+provider access is needed by these tests.
+
+**Issue #38 remains operationally incomplete.** The committed observations are
+preflight-only, native Yahoo population collection is unavailable, and the planner
+still requires an externally reviewed population upper bound rather than deriving
+a complete bound itself. Those are remaining delivery gaps. UNKNOWN account rights
+are a separate external blocker; resolving them would not by itself complete the
+missing source adapter or planner. Neither the initial fixture pass nor these
+correctness repairs should be described as completion of the issue.
+
+
+Review-fix validation: **267 focused tests passed** and the full disposable-PostgreSQL
+checklist recorded **553 passed, zero failures/errors/skips**, exact suite
+reconciliation and mandatory fresh-process reopen PASS. Scoped Ruff lint/format
+checks and `git diff --check` passed. The supplied
+`/private/tmp/us019_review_repro.py` now rejects its live fixture export instead
+of producing PASS. Repository regressions separately test maintained-calendar
+staleness, stale benchmark windows, observed-but-fixture provenance, wrong/missing
+account bindings and the original end-to-end export shape. A complete synthetic
+population with a benchmark still passes fixture evaluation and cannot pass a live
+release.
+
+New immutable [review preflight observation](evidence/pilot-qualification-review-2026-10-27.json),
+SHA-256 `72dfb70853a69dc82c3199a0ceb06c79920ea8b122713732f9ddc471b22aee30`,
+records zero Massive dispatches and zero Yahoo SDK calls, UNKNOWN rights, contract/
+freshness PASS and inventory/classification/identity/history/rights/provenance/
+workload/live-origin FAIL. No live provider calls were performed. All eight
+previously committed evidence artifacts are unchanged.
+
+The [review release result](evidence/foundation-qualification-review-release-2026-10-27.json)
+and [review reopen evidence](evidence/foundation-qualification-review-reopen-2026-10-27.json)
+were produced with:
+
+```sh
+STOCK_ANALYSER_TEST_DATABASE_URL=postgresql+psycopg://stock_analyser:local-test-password@127.0.0.1:55437/stock_analyser \
+  uv run --locked python scripts/foundation_release.py \
+  --output /private/tmp/alphasnitch-us019-review-release-001 \
+  --qualification-evidence docs/evidence/pilot-qualification-review-2026-10-27.json
+```
+
+Use a new output directory when reproducing. The source was the working feature
+branch with review fixes (marked dirty); qualification records its exact source
+implementation hash. This is fixture acceptance, not live or clean-checkout
+qualification. Provider rights and all remaining operational gaps stay blocked.

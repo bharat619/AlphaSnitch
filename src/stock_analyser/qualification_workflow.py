@@ -40,6 +40,15 @@ from stock_analyser.version import source_version
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class SourceBinding(Evidence):
+    """Reviewed local source identity; never infer the account from an API key."""
+
+    provider: Literal["massive", "yfinance"]
+    dataset: Literal["reference", "classification", "prices"]
+    source_sha256: Hash
+    account_scope_sha256: Hash
+
+
 class WorkloadManifest(Evidence):
     version: Literal["qualification-workload-1"] = "qualification-workload-1"
     stage: Literal["inventory", "population"] = "inventory"
@@ -58,6 +67,7 @@ class WorkloadManifest(Evidence):
     population_inputs_sha256: Hash | None = None
     estimated_http_upper_bound: Count | None = None
     rights: tuple[RightEvidence, ...] = ()
+    source_bindings: tuple[SourceBinding, ...] = ()
 
 
 def unknown_rights(now):
@@ -199,7 +209,9 @@ def empty_history(candidates=0):
     )
 
 
-def report_for(manifest, *, started, finished, origin, inventories, coverage, history, budget):
+def report_for(
+    manifest, *, started, finished, origin, inventories, coverage, history, budget, provenance=()
+):
     return QualificationReport(
         schema_version="2",
         run_id=uuid4(),
@@ -220,6 +232,7 @@ def report_for(manifest, *, started, finished, origin, inventories, coverage, hi
         history=history,
         budget=budget,
         rights=manifest.rights or unknown_rights(finished),
+        provenance=provenance,
     )
 
 
@@ -552,7 +565,9 @@ def run_inventory(client, output, manifest, budget, *, now=lambda: datetime.now(
     return write_report(output, report, now=now(), _reserved=True)
 
 
-def execute_population(output, manifest, inputs_path, *, now=lambda: datetime.now(UTC)):
+def execute_population(
+    output, manifest, inputs_path, *, now=lambda: datetime.now(UTC), resolver=None
+):
     """Measure an explicitly reviewed, rights-permitted local population export.
 
     Live Yahoo collection is unavailable until HTTP amplification and account
@@ -649,8 +664,34 @@ def execute_population(output, manifest, inputs_path, *, now=lambda: datetime.no
             )
         ):
             raise ValueError("Selection classification conflicts with population profile")
+    # Resolve at the qualification instant, independently of the frozen request.
+    # Injected calendars are only for explicitly synthetic exports.
+    expected_windows = validate_qualification_windows(
+        snapshot, acquired_finish, inputs["origin"], resolver=resolver
+    )
+    benchmark = (
+        UniverseSnapshot.model_validate(inputs["benchmark"])
+        if inputs["benchmark"] is not None
+        else None
+    )
+    benchmark_windows = ()
+    if benchmark is not None:
+        benchmark_windows = validate_qualification_windows(
+            benchmark, acquired_finish, inputs["origin"], resolver=resolver
+        )
+    provenance = validate_population_sources(snapshot, benchmark, manifest, origin=inputs["origin"])
     coverage = classify_population(rows, mappings, profiles, now=acquired_finish)
-    history = measure_selection(snapshot)
+    history = measure_selection(snapshot).model_copy(
+        update={
+            "qualification_as_of": acquired_finish,
+            "expected_windows_sha256": digest(
+                {
+                    "candidate": [p.model_dump(mode="json") for p in expected_windows],
+                    "benchmark": [p.model_dump(mode="json") for p in benchmark_windows],
+                }
+            ),
+        }
+    )
     if inputs["benchmark"] is not None:
         history = history.model_copy(
             update={
@@ -676,6 +717,7 @@ def execute_population(output, manifest, inputs_path, *, now=lambda: datetime.no
         coverage=coverage,
         history=history,
         budget=budget,
+        provenance=provenance,
     )
     return write_report(output, report, now=now())
 
@@ -721,3 +763,124 @@ def measure_benchmark(data, snapshot):
         except (OSError, ValueError):
             return False
     return True
+
+
+def qualification_resolutions(snapshot, as_of, origin, resolver=None):
+    from stock_analyser.calendars import ExchangeCalendarAdapter, HistoryResolver
+    from stock_analyser.universe import resolve_selection
+
+    if origin == "live":
+        if resolver is not None:
+            raise ValueError("Live qualification requires the maintained calendar adapter")
+        resolver = HistoryResolver(ExchangeCalendarAdapter(), snapshot.request.cutoff_policy)
+    elif resolver is None:
+        raise ValueError("Synthetic qualification requires an explicit test calendar")
+    if resolver.policy != snapshot.request.cutoff_policy:
+        raise ValueError("Qualification calendar policy differs from selection")
+    return resolve_selection(
+        snapshot.request.model_copy(update={"requested_as_of": as_of}), resolver
+    )
+
+
+def validate_qualification_windows(snapshot, as_of, origin, *, resolver=None):
+    """Compare full independently resolved daily/weekly windows, not just timestamps.
+
+    Same-window reuse over weekends is valid. Replaying an older generation after
+    a new required session completes is not evidence of current coverage.
+    """
+    expected = qualification_resolutions(snapshot, as_of, origin, resolver)
+
+    def keys(p):
+        return p.venue, p.requirement.timeframe, p.requirement.adjustment
+
+    frozen = {keys(p): p for p in snapshot.resolutions}
+    if len(frozen) != len(expected):
+        raise ValueError("Qualification history windows are incomplete")
+    for current in expected:
+        old = frozen.get(keys(current))
+        if (
+            old is None
+            or old.periods != current.periods
+            or old.calendar != current.calendar
+            or old.calendar_data_version != current.calendar_data_version
+            or old.policy != current.policy
+            or old.requirement != current.requirement
+            or len(current.periods) != current.requirement.required_bars
+        ):
+            raise ValueError("History is not current at the qualification as-of time")
+    if snapshot.request.requested_as_of > as_of:
+        raise ValueError("History request is later than qualification as-of")
+    return expected
+
+
+def validate_population_sources(snapshot, benchmark, manifest, *, origin):
+    """Bind actual retained source records to reviewed dataset/account permissions.
+
+    Synthetic fixture evaluation remains available offline, but its origin cannot
+    qualify a live release. Publication flags never turn a fixture into live data.
+    """
+    from stock_analyser.cache import load_snapshot
+    from stock_analyser.qualification import SourceUse
+
+    if origin == "synthetic":
+        return ()
+    bindings = {(b.provider, b.dataset, b.source_sha256): b for b in manifest.source_bindings}
+    if len(bindings) != len(manifest.source_bindings):
+        raise ValueError("Duplicate source/account bindings")
+    rights = {(r.provider, r.dataset, r.operation): r for r in manifest.rights}
+    uses = {}
+
+    def require(source, dataset, provider):
+        if source.provider != provider:
+            raise ValueError("Actual source provider is not permitted for this dataset")
+        try:
+            actual_hash = file_hash(Path(source.reference))
+        except OSError:
+            raise ValueError("Actual source detail is not available for verification") from None
+        if actual_hash != source.sha256:
+            raise ValueError("Actual source bytes differ from reviewed source hash")
+        binding = bindings.get((provider, dataset, source.sha256))
+        if binding is None:
+            raise ValueError("Actual source has no reviewed account/dataset binding")
+        for operation in ("collect", "retain", "derive_internal"):
+            right = rights.get((provider, dataset, operation))
+            if (
+                right is None
+                or right.disposition != "permitted"
+                or right.conditions
+                or right.account_scope_sha256 != binding.account_scope_sha256
+            ):
+                raise ValueError("Actual source account does not match dataset permissions")
+        uses.setdefault((provider, dataset, binding.account_scope_sha256), set()).add(source.sha256)
+
+    require(snapshot.request.population.source, "reference", "massive")
+    for candidate in snapshot.request.population.candidates:
+        if candidate.classification is not None:
+            require(candidate.classification.source, "classification", "yfinance")
+    for item in (snapshot, benchmark):
+        if item is None:
+            continue
+        if item.request.cutoff_policy.publication_timing != "observed" or any(
+            route.feed.kind == "synthetic" for route in item.request.market.routes
+        ):
+            raise ValueError("Synthetic or unverified provenance cannot qualify live evidence")
+        for reference in item.request.histories:
+            packet = load_snapshot(reference)
+            if packet.metadata.feed.kind not in ("consolidated", "venue"):
+                raise ValueError("Synthetic or discovery prices cannot qualify live evidence")
+            if packet.response.get("provider") != "massive":
+                raise ValueError("Actual price response provider is outside permitted scope")
+            if not packet.metadata.sources:
+                raise ValueError("Price evidence has no actual source provenance")
+            for source in packet.metadata.sources:
+                require(source, "prices", "massive")
+    return tuple(
+        SourceUse(
+            provider=p,
+            dataset=d,
+            account_scope_sha256=a,
+            source_count=len(hashes),
+            source_set_sha256=digest(sorted(hashes)),
+        )
+        for (p, d, a), hashes in sorted(uses.items())
+    )

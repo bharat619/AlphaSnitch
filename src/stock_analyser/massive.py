@@ -5,9 +5,12 @@ transport and clock for deterministic failure tests without spending live quota.
 """
 
 import http.client
+import io
 import json
 import math
 import os
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -61,9 +64,126 @@ class Transport(Protocol):
     def __call__(self, target: str, key: SecretStr, timeout: float) -> HttpResponse: ...
 
 
-def https_transport(target: str, key: SecretStr, timeout: float) -> HttpResponse:
-    # http.client neither follows redirects nor installs HTTP debug logging.
-    connection = http.client.HTTPSConnection("api.massive.com", timeout=timeout)
+class _DeadlineReader(io.RawIOBase):
+    """Apply the same deadline to every low-level header/body read, including dribbles."""
+
+    def __init__(self, raw, sock, remaining):
+        self.raw, self.sock, self.remaining = raw, sock, remaining
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        self.sock.settimeout(self.remaining())
+        result = self.raw.readinto(buffer)
+        self.remaining()
+        return result
+
+    def close(self):
+        try:
+            self.raw.close()
+        finally:
+            super().close()
+
+
+class _DeadlineSocket:
+    def __init__(self, sock, remaining):
+        self.sock, self.remaining = sock, remaining
+
+    def __getattr__(self, name):
+        return getattr(self.sock, name)
+
+    def sendall(self, data, *args):
+        self.sock.settimeout(self.remaining())
+        self.sock.sendall(data, *args)
+        self.remaining()
+
+    def makefile(self, mode, buffering=None):
+        if mode != "rb":
+            raise ValueError("Unsupported HTTP response stream mode")
+        raw = self.sock.makefile(mode, buffering=0)
+        return io.BufferedReader(_DeadlineReader(raw, self.sock, self.remaining))
+
+
+class _DeadlineHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host, remaining):
+        self.remaining = remaining
+        super().__init__(host, timeout=remaining())
+        self._create_connection = self._connect_socket
+
+    def _connect_socket(self, address, timeout, source_address=None):
+        # A C-library DNS lookup cannot be interrupted by a socket timeout.
+        # Isolate only resolution; subprocess.run kills and reaps on timeout or
+        # interruption, and the child never receives the API key as an argument.
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    "import json,socket,sys; print(json.dumps(socket.getaddrinfo("
+                    "sys.argv[1],int(sys.argv[2]),0,socket.SOCK_STREAM)))",
+                    address[0],
+                    str(address[1]),
+                ],
+                capture_output=True,
+                timeout=self.remaining(),
+                check=True,
+            )
+        except subprocess.TimeoutExpired:
+            raise TimeoutError("Massive DNS deadline exhausted") from None
+        except subprocess.SubprocessError:
+            raise OSError("Massive DNS resolution failed") from None
+        self.remaining()
+        try:
+            if len(result.stdout) > 65536:
+                raise ValueError
+            addresses = json.loads(result.stdout)
+            if not addresses or len(addresses) > 128:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise OSError("Massive DNS resolution returned invalid addresses") from None
+        last_error = None
+        for family, kind, protocol, _, sockaddr in addresses:
+            sock = socket.socket(family, kind, protocol)
+            try:
+                sock.settimeout(self.remaining())
+                if source_address:
+                    sock.bind(source_address)
+                sock.connect(tuple(sockaddr))
+                self.remaining()
+                return sock
+            except OSError as exc:
+                sock.close()
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise OSError("No address available for provider")
+
+    def connect(self):
+        http.client.HTTPConnection.connect(self)
+        # TCP and TLS share the original deadline; TLS gets only what remains.
+        self.sock.settimeout(self.remaining())
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+        self.remaining()
+        self.sock = _DeadlineSocket(self.sock, self.remaining)
+
+
+def https_transport(
+    target: str, key: SecretStr, timeout: float, *, deadline=None, clock=None
+) -> HttpResponse:
+    # Start before connect/TLS, never after headers. Buffered HTTP parsing uses
+    # a deadline-aware raw reader, so slow header lines cannot reset the budget.
+    clock = clock or time.monotonic
+    deadline = min(clock() + timeout, deadline) if deadline is not None else clock() + timeout
+
+    def remaining():
+        value = deadline - clock()
+        if value <= 0:
+            raise TimeoutError("Massive absolute transport deadline exhausted")
+        return value
+
+    connection = _DeadlineHTTPSConnection("api.massive.com", remaining)
     try:
         connection.request(
             "GET",
@@ -73,23 +193,21 @@ def https_transport(target: str, key: SecretStr, timeout: float) -> HttpResponse
                 "Accept": "application/json",
             },
         )
+        remaining()
         response = connection.getresponse()
-        deadline = time.monotonic() + timeout
+        remaining()
         parts, size = [], 0
         while True:
-            if time.monotonic() >= deadline:
-                raise TimeoutError
-            if connection.sock is not None:
-                connection.sock.settimeout(max(0.001, deadline - time.monotonic()))
+            remaining()
             chunk = response.read1(65536)
+            remaining()
             if not chunk:
                 break
             parts.append(chunk)
             size += len(chunk)
             if size > 16 * 1024 * 1024:
                 raise MassiveError("Massive response exceeded the size bound")
-        body = b"".join(parts)
-        return HttpResponse(response.status, dict(response.getheaders()), body)
+        return HttpResponse(response.status, dict(response.getheaders()), b"".join(parts))
     finally:
         connection.close()
 
@@ -234,10 +352,21 @@ class MassiveClient:
                 if attempt:
                     self.budget.record_retry()
             try:
-                response = self.transport(target, self._key, timeout)
+                if self.budget is not None and self.transport is https_transport:
+                    response = https_transport(
+                        target,
+                        self._key,
+                        timeout,
+                        deadline=self.budget.started + self.budget.seconds,
+                        clock=self.budget.clock,
+                    )
+                else:
+                    response = self.transport(target, self._key, timeout)
                 if self.budget is not None:
                     self.budget.remaining()
             except (OSError, http.client.HTTPException):
+                if self.budget is not None:
+                    self.budget.remaining()
                 if attempt == self.settings.retries:
                     raise MassiveError("Massive transport failed within the retry bound") from None
                 if self.budget is not None:

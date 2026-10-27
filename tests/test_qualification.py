@@ -102,6 +102,8 @@ def qualifying():
         exclusion_reasons={},
         blocker_reasons={},
         selection_inputs_sha256=digest("local-inputs"),
+        qualification_as_of=NOW,
+        expected_windows_sha256=digest("synthetic-windows"),
         benchmark_measured=True,
         calendars_and_feeds_verified=True,
     )
@@ -414,7 +416,9 @@ def test_reviewed_population_export_measures_all_candidates_without_raw_report_l
         population_inputs_sha256=file_hash(path),
         rights=rights,
     )
-    report = execute_population(tmp_path / "aggregate", manifest, path, now=lambda: stamp)
+    report = execute_population(
+        tmp_path / "aggregate", manifest, path, now=lambda: stamp, resolver=resolver
+    )
     assert report["history"]["qualified"] == 12
     assert report["coverage"]["technology"] == report["coverage"]["resolved"] == 12
     assert report["gate"]["blockers"] == ["HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE"]
@@ -531,3 +535,345 @@ def test_supported_interruption_preserves_partial_enumeration():
     result = enumerate_yahoo(screen, page_size=1)
     assert result.reason == "INTERRUPTED" and result.status == "TRUNCATED"
     assert len(result.rows) == 1
+
+
+def test_history_and_weekly_windows_are_resolved_at_qualification_as_of():
+    from types import SimpleNamespace
+
+    from stock_analyser.calendars import CutoffPolicy, ExchangeCalendarAdapter, HistoryResolver
+    from stock_analyser.contracts import HistoryRequirement
+    from stock_analyser.markets import US_MARKET
+    from stock_analyser.qualification_workflow import validate_qualification_windows
+    from stock_analyser.universe import SelectionPolicy
+
+    policy = SelectionPolicy(
+        mandatory_history=(HistoryRequirement(timeframe="weekly", minimum_bars=2),)
+    )
+    cutoff_policy = CutoffPolicy(publication_timing="observed")
+    resolver = HistoryResolver(ExchangeCalendarAdapter(), cutoff_policy)
+    old = datetime(2026, 10, 16, 21, tzinfo=UTC)
+    candidate = SimpleNamespace(instrument=SimpleNamespace(venue="XNAS"))
+    request = SimpleNamespace(
+        market=US_MARKET,
+        requested_as_of=old,
+        policy=policy,
+        cutoff_policy=cutoff_policy,
+        population=SimpleNamespace(candidates=(candidate,)),
+    )
+
+    # Use the real request interface with only the fields needed by resolve_selection.
+    def copy(update):
+        return SimpleNamespace(**{**request.__dict__, **update})
+
+    request.model_copy = lambda *, update: copy(update)
+    plans = tuple(resolver.resolve(US_MARKET, "XNAS", h, old) for h in policy.requirements())
+    snapshot = SimpleNamespace(request=request, resolutions=plans)
+    validate_qualification_windows(snapshot, old, "live")
+    # Weekend: no new required period. Original request timestamps need not be identical.
+    validate_qualification_windows(snapshot, old + timedelta(days=1), "live")
+    with pytest.raises(ValueError, match="not current"):
+        validate_qualification_windows(snapshot, NOW, "live")
+    # A refreshed timestamp alone cannot refresh the frozen daily/weekly periods.
+    request.requested_as_of = NOW
+    with pytest.raises(ValueError, match="not current"):
+        validate_qualification_windows(snapshot, NOW, "live")
+
+
+@pytest.fixture
+def live_source_case(qualifying, tmp_path):
+    from types import SimpleNamespace
+
+    from stock_analyser.contracts import SourceRecord
+    from stock_analyser.qualification import RightEvidence
+    from stock_analyser.qualification_workflow import SourceBinding
+
+    def source(provider, name):
+        from stock_analyser.qualification import file_hash
+
+        path = tmp_path / name
+        path.write_text(name)
+        return SourceRecord(
+            provider=provider,
+            provider_symbol="AAA",
+            retrieved_at=NOW,
+            reference=str(path),
+            sha256=file_hash(path),
+        )
+
+    reference = source("massive", "reference")
+    classification = source("yfinance", "classification")
+    prices = source("massive", "prices")
+    benchmark_prices = source("massive", "benchmark")
+    feed = SimpleNamespace(kind="consolidated")
+
+    def snapshot(histories):
+        return SimpleNamespace(
+            request=SimpleNamespace(
+                cutoff_policy=SimpleNamespace(publication_timing="observed"),
+                market=SimpleNamespace(routes=(SimpleNamespace(feed=feed),)),
+                population=SimpleNamespace(
+                    source=reference,
+                    candidates=(
+                        SimpleNamespace(classification=SimpleNamespace(source=classification)),
+                    ),
+                ),
+                histories=histories,
+            )
+        )
+
+    packets = {
+        "candidate": SimpleNamespace(
+            metadata=SimpleNamespace(feed=feed, sources=(prices,)), response={"provider": "massive"}
+        ),
+        "benchmark": SimpleNamespace(
+            metadata=SimpleNamespace(feed=feed, sources=(benchmark_prices,)),
+            response={"provider": "massive"},
+        ),
+    }
+    rights = tuple(RightEvidence.model_validate(r) for r in qualifying["rights"])
+    account = rights[0].account_scope_sha256
+    bindings = tuple(
+        SourceBinding(
+            provider=s.provider, dataset=d, source_sha256=s.sha256, account_scope_sha256=account
+        )
+        for s, d in (
+            (reference, "reference"),
+            (classification, "classification"),
+            (prices, "prices"),
+            (benchmark_prices, "prices"),
+        )
+    )
+    return (
+        snapshot(("candidate",)),
+        snapshot(("benchmark",)),
+        packets,
+        WorkloadManifest(rights=rights, source_bindings=bindings),
+    )
+
+
+def test_actual_source_hashes_are_bound_to_reviewed_dataset_and_account(
+    live_source_case, monkeypatch
+):
+    import stock_analyser.cache as cache
+    from stock_analyser.qualification_workflow import validate_population_sources
+
+    snapshot, benchmark, packets, manifest = live_source_case
+    monkeypatch.setattr(cache, "load_snapshot", packets.__getitem__)
+    uses = validate_population_sources(snapshot, benchmark, manifest, origin="live")
+    assert {(u.provider, u.dataset) for u in uses} == {
+        ("massive", "reference"),
+        ("yfinance", "classification"),
+        ("massive", "prices"),
+    }
+    assert next(u.source_count for u in uses if u.dataset == "prices") == 2
+    wrong = manifest.source_bindings[0].model_copy(
+        update={"account_scope_sha256": digest("other-account")}
+    )
+    with pytest.raises(ValueError, match="account"):
+        validate_population_sources(
+            snapshot,
+            benchmark,
+            manifest.model_copy(update={"source_bindings": (wrong, *manifest.source_bindings[1:])}),
+            origin="live",
+        )
+    with pytest.raises(ValueError, match="binding"):
+        validate_population_sources(
+            snapshot,
+            benchmark,
+            manifest.model_copy(update={"source_bindings": manifest.source_bindings[1:]}),
+            origin="live",
+        )
+
+
+@pytest.mark.parametrize(
+    "kind", ["reference", "classification", "prices", "benchmark", "feed", "response"]
+)
+def test_fixture_sources_are_rejected_independently_of_publication_flag(
+    live_source_case, monkeypatch, kind
+):
+    import stock_analyser.cache as cache
+    from stock_analyser.qualification_workflow import validate_population_sources
+
+    snapshot, benchmark, packets, manifest = live_source_case
+    if kind == "reference":
+        snapshot.request.population.source = snapshot.request.population.source.model_copy(
+            update={"provider": "fixture-us"}
+        )
+    elif kind == "classification":
+        classification = snapshot.request.population.candidates[0].classification
+        classification.source = classification.source.model_copy(update={"provider": "fixture-us"})
+    elif kind in ("prices", "benchmark"):
+        packet = packets["candidate" if kind == "prices" else "benchmark"]
+        packet.metadata.sources = (
+            packet.metadata.sources[0].model_copy(update={"provider": "fixture-us"}),
+        )
+    elif kind == "feed":
+        packets["candidate"].metadata.feed = type(packets["candidate"].metadata.feed)(
+            kind="synthetic"
+        )
+    else:
+        packets["candidate"].response["provider"] = "fixture-us"
+    monkeypatch.setattr(cache, "load_snapshot", packets.__getitem__)
+    with pytest.raises(ValueError):
+        validate_population_sources(snapshot, benchmark, manifest, origin="live")
+
+
+@pytest.mark.parametrize("mutation", ["none", "stale_candidate", "stale_benchmark", "live_fixture"])
+def test_population_export_regressions_end_to_end(qualifying, tmp_path, mutation):
+    import json
+
+    from stock_analyser.calendars import CutoffPolicy
+    from stock_analyser.qualification import RightEvidence, file_hash
+    from stock_analyser.qualification_workflow import execute_population
+    from stock_analyser.universe import select_universe
+    from stock_analyser.universe_demo import fixture_request
+    from stock_analyser.universe_spike import REFERENCE_FIELDS, project
+
+    stamp = datetime(2026, 10, 16, 21, tzinfo=UTC)
+    # The live-forgery regression intentionally sets observed publication while
+    # retaining actual fixture-us data/feed/calendar provenance, as in the review.
+    cutoff = CutoffPolicy(
+        publication_timing="observed" if mutation == "live_fixture" else "synthetic"
+    )
+    request, resolver = fixture_request(
+        tmp_path / "local", as_of=stamp, cutoff_policy=cutoff, extra_symbols=("SPY",)
+    )
+
+    def select(request, resolver, prefix):
+        return select_universe(
+            request.model_copy(
+                update={
+                    "population": request.population.model_copy(
+                        update={
+                            "candidates": tuple(
+                                c
+                                for c in request.population.candidates
+                                if c.reference.ticker.startswith(prefix)
+                            )
+                        }
+                    )
+                }
+            ),
+            resolver,
+        )
+
+    snapshot = select(request, resolver, "TECH")
+    benchmark = select(request, resolver, "SPY")
+    if mutation == "stale_candidate":
+        stamp = NOW
+        # Extend the independent synthetic calendar through the qualification day;
+        # refreshing classification metadata does not update the cached price window.
+        from stock_analyser.calendars import CalendarSession, HistoryResolver
+        from stock_analyser.fixtures import FixtureSessionCalendar
+
+        sessions = list(resolver.calendar.sessions)
+        day = datetime(2026, 10, 19, tzinfo=UTC)
+        while day.date() <= stamp.date():
+            if day.weekday() < 5:
+                sessions.append(
+                    CalendarSession(
+                        session=day.date(),
+                        opens_at=day.replace(hour=14),
+                        closes_at=day.replace(hour=20),
+                    )
+                )
+            day += timedelta(days=1)
+        resolver = HistoryResolver(FixtureSessionCalendar(request.market, tuple(sessions)), cutoff)
+        candidates = tuple(
+            c.model_copy(
+                update={
+                    "classification": c.classification.model_copy(
+                        update={
+                            "source": c.classification.source.model_copy(
+                                update={"retrieved_at": stamp}
+                            )
+                        }
+                    )
+                }
+            )
+            for c in snapshot.request.population.candidates
+        )
+        # Re-freeze legitimately refreshed classifications, preserving the old bars/windows.
+        snapshot = select(
+            snapshot.request.model_copy(
+                update={
+                    "population": snapshot.request.population.model_copy(
+                        update={"candidates": candidates}
+                    )
+                }
+            ),
+            HistoryResolver(resolver.calendar, cutoff),
+            "TECH",
+        )
+    elif mutation == "stale_benchmark":
+        old_request, old_resolver = fixture_request(
+            tmp_path / "old-benchmark", as_of=stamp - timedelta(days=1), extra_symbols=("SPY",)
+        )
+        benchmark = select(old_request, old_resolver, "SPY")
+    rows = [c.reference.model_dump() for c in snapshot.request.population.candidates]
+    inventories = qualifying["inventories"]
+    for item in inventories:
+        item.update(raw_rows=12, unique_rows=12)
+        item["pages"][0].update(rows=12, retrieved_at=stamp.isoformat())
+        if item["source"] == "massive":
+            item["pages"][0]["sha256"] = digest(project(rows, REFERENCE_FIELDS, "ticker"))
+        else:
+            item["reported_total"] = 12
+    inputs = {
+        "snapshot": snapshot.model_dump(mode="json"),
+        "benchmark": benchmark.model_dump(mode="json"),
+        "inventories": inventories,
+        "mappings": {r["ticker"]: mapping(r) for r in rows},
+        "profiles": {
+            c.reference.ticker: {
+                "symbol": c.classification.source.provider_symbol,
+                "sector": c.classification.original_sector,
+                "retrieved_at": stamp.isoformat(),
+            }
+            for c in snapshot.request.population.candidates
+        },
+        "budget": qualifying["budget"],
+        "origin": "live" if mutation == "live_fixture" else "synthetic",
+        "started_at": stamp.isoformat(),
+        "finished_at": stamp.isoformat(),
+    }
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(inputs, default=str))
+    rights = tuple(
+        RightEvidence.model_validate(
+            {
+                **right,
+                "reviewed_at": stamp.isoformat(),
+                "valid_until": (stamp + timedelta(days=1)).isoformat(),
+            }
+        )
+        for right in qualifying["rights"]
+    )
+    manifest = WorkloadManifest(
+        stage="population",
+        request_ceiling=100,
+        per_source_ceilings={"massive": 50, "yfinance": 50},
+        estimated_http_upper_bound=50,
+        reference_count=12,
+        inventory_sha256=digest(
+            [InventoryEvidence.model_validate(i).model_dump(mode="json") for i in inventories]
+        ),
+        population_inputs_sha256=file_hash(path),
+        rights=rights,
+    )
+    if mutation == "none":
+        report = execute_population(
+            tmp_path / "result", manifest, path, now=lambda: stamp, resolver=resolver
+        )
+        assert report["gate"]["full_sector_accepted"]
+        assert not evaluate_qualification(report, now=stamp, live=True)["full_sector_accepted"]
+    else:
+        with pytest.raises(ValueError):
+            execute_population(
+                tmp_path / "result",
+                manifest,
+                path,
+                now=lambda: stamp,
+                resolver=None if mutation == "live_fixture" else resolver,
+            )
+        assert not (tmp_path / "result/findings.json").exists()

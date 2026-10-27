@@ -262,3 +262,22 @@ records the actual fixture artifact hashes. The initial sandboxed database attem
 failed; the authorized run against the separate disposable server succeeded.
 Reproduction commands, exact preflight artifact hash, per-gate outcomes and measured
 versus unperformed workload are recorded in [pilot qualification](pilot-qualification.md).
+
+
+### Correctness review follow-up
+
+The f3438d5 fixture pass missed stale-window, actual-provider/account provenance,
+and shared transport deadline failures. See [review corrections](pilot-qualification.md#review-corrections-to-f3438d5).
+Current criteria `us-technology-qualification-2` independently checks candidate and
+benchmark completed-session windows at qualification as-of and records an actual
+source/account provenance gate. Historical criteria-v1 observations remain
+unchanged and cannot qualify v2. Issue #38 remains operationally incomplete:
+Yahoo population collection and a complete automatically calculated population
+workload bound are still missing, independently of UNKNOWN account rights.
+
+The [review-fix release result](evidence/foundation-qualification-review-release-2026-10-27.json)
+records **553 passed, zero failures/errors/skips** and mandatory fresh-process
+acceptance. Its [reopen evidence](evidence/foundation-qualification-review-reopen-2026-10-27.json)
+and the [separate criteria-v2 preflight](evidence/pilot-qualification-review-2026-10-27.json)
+preserve the actual measurements. Live smoke was NOT_RUN, rights UNKNOWN, pilot
+FAIL and milestone incomplete. All previous observations remain unchanged.
