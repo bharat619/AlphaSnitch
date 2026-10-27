@@ -35,8 +35,9 @@ mandatory fresh-process evidence, including its SHA-256 hash.
 **Release milestone remains blocked by pilot-sector coverage.** The existing
 [observed qualification](evidence/technology-universe-2026-10-24.json) fails
 classification completeness, cross-source identity mapping, history/liquidity
-measurement and retention-rights qualification. The current qualifier intentionally
-cannot grant full-sector acceptance. AAPL/SPY smoke success and synthetic top-ten
+measurement and retention-rights qualification. The historical v1 qualifier could not grant full-sector acceptance. Schema 2
+now recomputes versioned qualification gates; current UNKNOWN provider rights
+and unmeasured population evidence keep acceptance blocked. AAPL/SPY smoke success and synthetic top-ten
 selection cannot clear these blockers. No paid provider upgrade is part of this release.
 
 ## Reproduce from a clean checkout
@@ -138,13 +139,19 @@ database URL as well as the test URL, configure an existing `MASSIVE_API_KEY`, a
 uv run --locked python scripts/foundation_release.py --output /tmp/foundation-live-001 --live
 ```
 
-The live phase refreshes AAPL/SPY daily/weekly evidence using existing routing,
-then runs the universe spike with at most two pages per source and two classification
-profiles. Each command has a 180-second wall-clock limit; the existing Massive
-shared rate allowance, request budget, pagination bounds and cooldown remain in
-effect. These deliberately small bounds may truncate enumeration, which is failure
-evidence. yfinance SDK HTTP amplification is unknown. A timeout is an inconclusive
-failed observation, not absence of data. No news/model calls are requested.
+The live phase refreshes AAPL/SPY daily/weekly evidence using existing routing
+with a 180-second wall-clock limit. It no longer invokes a hard-coded sector sample.
+Current operator instructions keep affected live collection blocked because rights
+are UNKNOWN; do not use `--live` for this US-019 verification. No news/model calls
+are requested.
+
+Supply `--qualification-evidence /absolute/path/to/new/findings.json` to consume an
+explicit schema 2 qualification observation. The runner records the exact file hash
+and recomputes source/policy/criteria compatibility, counts, freshness, rights and
+all gates at consumption time. Historical v1 evidence remains the visible default
+and cannot pass. Synthetic all-PASS fixtures cannot qualify the live release.
+See [pilot qualification](pilot-qualification.md) for offline planning, reviewed
+inventory/population contracts, current source investigation and required permissions.
 
 `release.json` separates `fixture_readiness`, `live_observation`, `pilot_sector`
 and `milestone`. Runner exit zero means **fixture acceptance passed**; milestone
@@ -235,3 +242,23 @@ historical receipts and reports remain immutable.
   spike is evidence of gaps, not approval of a production universe.
 
 India and additional paid providers remain outside this release.
+
+
+## US-019 qualification handoff (2026-10-27)
+
+The new [preflight observation](evidence/pilot-qualification-preflight-2026-10-27.json)
+records UNKNOWN rights and zero provider dispatches. Inventory, classification,
+identity, history/liquidity, rights and workload gates remain FAIL. Preflight origin
+cannot qualify a live release. The policy/criteria and timestamp compatibility gate
+can pass for a fresh report; metadata freshness is reevaluated after 24 hours.
+The October 24 observations remain byte-for-byte unchanged. Fixture readiness,
+AAPL/SPY smoke, pilot qualification and milestone completion remain independent.
+No live smoke or broad provider run was performed for US-019 under UNKNOWN rights.
+
+The [US-019 fixture release result](evidence/foundation-qualification-release-2026-10-27.json)
+records **534 passed, zero errors/failures/skips**, exact suite reconciliation and
+mandatory fresh-process acceptance. The [new reopen evidence](evidence/foundation-qualification-reopen-2026-10-27.json)
+records the actual fixture artifact hashes. The initial sandboxed database attempt
+failed; the authorized run against the separate disposable server succeeded.
+Reproduction commands, exact preflight artifact hash, per-gate outcomes and measured
+versus unperformed workload are recorded in [pilot qualification](pilot-qualification.md).

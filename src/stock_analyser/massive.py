@@ -188,6 +188,8 @@ class MassiveClient:
         allowance: ProviderAllowance,
         settings: MassiveSettings,
         transport: Transport = https_transport,
+        *,
+        budget=None,
     ):
         if not key.get_secret_value().strip():
             raise MassiveError("Set MASSIVE_API_KEY before live collection")
@@ -195,6 +197,7 @@ class MassiveClient:
         self.allowance = allowance
         self.settings = settings
         self.transport = transport
+        self.budget = budget
         self._requests = 0
         self._mutex = threading.Lock()
         self.observations: list[dict] = []
@@ -220,14 +223,25 @@ class MassiveClient:
                 if self._requests >= self.settings.max_requests:
                     raise MassiveError("Massive request budget exhausted")
                 self._requests += 1
-            self.allowance.acquire(
-                max_wait_seconds=max(self.allowance.interval, self.settings.max_retry_delay_seconds)
-            )
+            wait_bound = max(self.allowance.interval, self.settings.max_retry_delay_seconds)
+            if self.budget is not None:
+                wait_bound = min(wait_bound, self.budget.remaining())
+            self.allowance.acquire(max_wait_seconds=wait_bound)
+            timeout = self.settings.timeout_seconds
+            if self.budget is not None:
+                timeout = min(timeout, self.budget.remaining())
+                self.budget.dispatch("massive")
+                if attempt:
+                    self.budget.record_retry()
             try:
-                response = self.transport(target, self._key, self.settings.timeout_seconds)
+                response = self.transport(target, self._key, timeout)
+                if self.budget is not None:
+                    self.budget.remaining()
             except (OSError, http.client.HTTPException):
                 if attempt == self.settings.retries:
                     raise MassiveError("Massive transport failed within the retry bound") from None
+                if self.budget is not None:
+                    self.budget.record_cooldown(2**attempt)
                 self.allowance.defer(2**attempt)
                 continue
             self.observations.append(
@@ -241,6 +255,8 @@ class MassiveClient:
                 # Persist the cooldown even when the final attempt failed.
                 delay = self._delay(response, attempt)
                 exceeds_wait = delay > self.settings.max_retry_delay_seconds
+                if self.budget is not None:
+                    self.budget.record_cooldown(delay)
                 self.allowance.defer(delay, stop=exceeds_wait)
                 if exceeds_wait:
                     raise ProviderCooldownError(
@@ -523,10 +539,10 @@ class MassiveActionsProvider:
 
 @contextmanager
 def live_client(
-    key: SecretStr, settings: MassiveSettings, lock_path: Path
+    key: SecretStr, settings: MassiveSettings, lock_path: Path, *, budget=None
 ) -> Iterator[MassiveClient]:
     with ProviderAllowance(lock_path, settings.requests_per_minute) as allowance:
-        yield MassiveClient(key, allowance, settings)
+        yield MassiveClient(key, allowance, settings, budget=budget)
 
 
 class MassiveEvidenceProvider:
