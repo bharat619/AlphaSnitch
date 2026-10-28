@@ -1,0 +1,415 @@
+{
+  "schema_version": "2",
+  "run_id": "5cb40433-010b-43ab-af0d-0a22d9ca8f36",
+  "origin": "preflight",
+  "started_at": "2026-10-27T09:31:52.745065Z",
+  "finished_at": "2026-10-27T09:31:52.745119Z",
+  "as_of": "2026-10-27T09:31:52.745119Z",
+  "source_version": {
+    "package_version": "0.1.0",
+    "commit": "87439f5f4664688c8a27d574a0a6bed901da43d7",
+    "dirty": true
+  },
+  "implementation_sha256": "475a49ecd1b77c3e2affad845aa31e100f0bc53fea8f2f877daa95d519f92165",
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "policy_sha256": "5a50f9173985edb5dabd1c05392f65dde45a3b9c62b64663c1bdf53df85d3141",
+  "criteria": {
+    "version": "us-technology-qualification-1",
+    "metadata_ttl_hours": 24,
+    "rights_ttl_days": 30,
+    "minimum_selected": 10,
+    "retention_days": 365,
+    "scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+    "policy_sha256": "5a50f9173985edb5dabd1c05392f65dde45a3b9c62b64663c1bdf53df85d3141",
+    "selection_policy": {
+      "schema_version": "1",
+      "version": "us-technology-selection-1",
+      "proposal_version": "us-technology-proposed-1",
+      "thresholds": "evaluation_hypotheses",
+      "taxonomy_mapping": "yahoo-sector-map-1",
+      "minimum_price_usd": "5",
+      "minimum_average_traded_value_usd": "10000000",
+      "traded_value_sessions": 60,
+      "minimum_daily_bars": 260,
+      "selection_count": 10,
+      "mandatory_history": []
+    },
+    "required_sources": [
+      "massive",
+      "yfinance"
+    ],
+    "required_rights": [
+      [
+        "massive",
+        "reference",
+        "collect"
+      ],
+      [
+        "massive",
+        "reference",
+        "retain"
+      ],
+      [
+        "massive",
+        "reference",
+        "derive_internal"
+      ],
+      [
+        "yfinance",
+        "classification",
+        "collect"
+      ],
+      [
+        "yfinance",
+        "classification",
+        "retain"
+      ],
+      [
+        "yfinance",
+        "classification",
+        "derive_internal"
+      ],
+      [
+        "massive",
+        "prices",
+        "collect"
+      ],
+      [
+        "massive",
+        "prices",
+        "retain"
+      ],
+      [
+        "massive",
+        "prices",
+        "derive_internal"
+      ]
+    ]
+  },
+  "criteria_sha256": "50b4f5360ee4297054bcf49136c8c42f5ef2b73dd9f1a6f0bf93781620a2e023",
+  "selection_policy_sha256": "e9bc6f179715d9ffc923bd4b288d505d61d3b4f1f8b6c8f61799a5d44af27f3e",
+  "scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+  "inventories": [
+    {
+      "source": "massive",
+      "query": "active_us_stocks",
+      "status": "NOT_RUN",
+      "reason": "RIGHTS_EVIDENCE_MISSING",
+      "method": "terminal_page",
+      "reported_total": null,
+      "raw_rows": 0,
+      "unique_rows": 0,
+      "duplicates": 0,
+      "errors": 0,
+      "count_kind": "lower_bound",
+      "pages": [],
+      "transactionally_consistent": false
+    },
+    {
+      "source": "yfinance",
+      "query": "us_technology_discovery",
+      "status": "NOT_RUN",
+      "reason": "RIGHTS_EVIDENCE_MISSING",
+      "method": "reported_total",
+      "reported_total": null,
+      "raw_rows": 0,
+      "unique_rows": 0,
+      "duplicates": 0,
+      "errors": 0,
+      "count_kind": "lower_bound",
+      "pages": [],
+      "transactionally_consistent": false
+    }
+  ],
+  "coverage": {
+    "reference_rows": 0,
+    "excluded_listings": 0,
+    "potentially_supported": 0,
+    "technology": 0,
+    "non_technology": 0,
+    "unknown": 0,
+    "conflicting": 0,
+    "as_of": "2026-10-27T09:31:52.745065Z",
+    "taxonomy": "yahoo-sector-map-1",
+    "method": "not_measured",
+    "resolved": 0,
+    "ambiguous": 0,
+    "identity_conflicts": 0,
+    "unmatched": 0,
+    "stable_id_matches": 0,
+    "corroborated_mapping_matches": 0,
+    "distinct_technology_securities": 0,
+    "duplicate_technology_listings": 0
+  },
+  "history": {
+    "candidates": 0,
+    "qualified": 0,
+    "measured_excluded": 0,
+    "failed": 0,
+    "not_attempted": 0,
+    "selected": 0,
+    "requirements_sha256": "d49f09110795a3a82aaf12f847ae4d31f81812de946250a0c5f7ccba148df988",
+    "selection_implementation": "sector-selection-2",
+    "adjustment": "raw",
+    "sessions": 60,
+    "exclusion_reasons": {},
+    "blocker_reasons": {
+      "HISTORY_NOT_MEASURED": 0
+    },
+    "reason_counts_overlap": true,
+    "selection_inputs_sha256": null,
+    "benchmark_measured": false,
+    "calendars_and_feeds_verified": false
+  },
+  "budget": {
+    "request_ceiling": 10,
+    "per_source_ceilings": {
+      "massive": 6,
+      "yfinance": 4
+    },
+    "http_attempts": {
+      "massive": 0,
+      "yfinance": null
+    },
+    "sdk_calls": 0,
+    "retries": 0,
+    "cooldown_seconds": 0.0,
+    "elapsed_seconds": 0.00013291696086525917,
+    "wall_seconds": 180.0,
+    "concurrency": 1,
+    "conservative_http_upper_bound": null,
+    "inventory_complete_for_estimate": false,
+    "cold_measured": false,
+    "warm_measured": false,
+    "stop_reason": "RIGHTS_EVIDENCE_MISSING"
+  },
+  "rights": [
+    {
+      "provider": "massive",
+      "dataset": "reference",
+      "operation": "collect",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "massive",
+      "dataset": "reference",
+      "operation": "retain",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "massive",
+      "dataset": "reference",
+      "operation": "derive_internal",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "yfinance",
+      "dataset": "classification",
+      "operation": "collect",
+      "disposition": "unknown",
+      "reference": "yahoo-terms",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "yfinance",
+      "dataset": "classification",
+      "operation": "retain",
+      "disposition": "unknown",
+      "reference": "yahoo-terms",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "yfinance",
+      "dataset": "classification",
+      "operation": "derive_internal",
+      "disposition": "unknown",
+      "reference": "yahoo-terms",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "massive",
+      "dataset": "prices",
+      "operation": "collect",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "massive",
+      "dataset": "prices",
+      "operation": "retain",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    },
+    {
+      "provider": "massive",
+      "dataset": "prices",
+      "operation": "derive_internal",
+      "disposition": "unknown",
+      "reference": "massive-market-data-2025-08-28",
+      "document_sha256": null,
+      "reviewed_at": "2026-10-27T09:31:52.745119Z",
+      "valid_until": "2026-10-28T09:31:52.745119Z",
+      "account_scope_sha256": "eb8bf0d80db323992f6b634aab492b1e6d9e96a8e87a511c2a0db75ab929452c",
+      "intended_scope_sha256": "b45a32e025b0e3a89ebdc124be558c427e6a50576fd017ba96bb40a4250b16e6",
+      "retention_days": 0,
+      "required_retention_days": 365,
+      "conditions": [
+        "ACCOUNT_ENTITLEMENT_UNVERIFIED",
+        "RETENTION_AND_DERIVED_USE_UNVERIFIED"
+      ]
+    }
+  ],
+  "gate": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "INVENTORY_INCOMPLETE_OR_INCONSISTENT",
+      "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING",
+      "IDENTITY_UNRESOLVED_OR_INCONSISTENT",
+      "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE",
+      "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE",
+      "WORKLOAD_UNVERIFIED_OR_EXHAUSTED",
+      "LIVE_EVIDENCE_REQUIRED"
+    ],
+    "gates": {
+      "contract": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "freshness": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "inventory": {
+        "status": "FAIL",
+        "reasons": [
+          "INVENTORY_INCOMPLETE_OR_INCONSISTENT"
+        ]
+      },
+      "classification": {
+        "status": "FAIL",
+        "reasons": [
+          "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING"
+        ]
+      },
+      "identity": {
+        "status": "FAIL",
+        "reasons": [
+          "IDENTITY_UNRESOLVED_OR_INCONSISTENT"
+        ]
+      },
+      "history_liquidity": {
+        "status": "FAIL",
+        "reasons": [
+          "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE"
+        ]
+      },
+      "rights": {
+        "status": "FAIL",
+        "reasons": [
+          "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE"
+        ]
+      },
+      "workload": {
+        "status": "FAIL",
+        "reasons": [
+          "WORKLOAD_UNVERIFIED_OR_EXHAUSTED"
+        ]
+      },
+      "origin": {
+        "status": "FAIL",
+        "reasons": [
+          "LIVE_EVIDENCE_REQUIRED"
+        ]
+      }
+    }
+  }
+}

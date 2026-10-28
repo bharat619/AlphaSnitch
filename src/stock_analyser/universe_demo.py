@@ -31,12 +31,20 @@ from stock_analyser.universe import (
 from stock_analyser.universe_spike import Enumeration
 
 
-def fixture_request(directory: Path, *, eligible_count=12, policy=None):
+def fixture_request(
+    directory: Path,
+    *,
+    eligible_count=12,
+    policy=None,
+    as_of=None,
+    cutoff_policy=None,
+    extra_symbols=(),
+):
     """Create a new synthetic dataset; all price histories are published to EvidenceCache."""
     directory = directory.resolve()
     market = fixture_market("US", "USD", "XNAS", "America/New_York")
-    cutoff = datetime(2026, 10, 16, 21, tzinfo=UTC)
-    cutoff_policy = CutoffPolicy(publication_timing="synthetic")
+    cutoff = as_of or datetime(2026, 10, 16, 21, tzinfo=UTC)
+    cutoff_policy = cutoff_policy or CutoffPolicy(publication_timing="synthetic")
     sessions = []
     day = date(2025, 1, 1)
     while day <= cutoff.date():
@@ -53,6 +61,7 @@ def fixture_request(directory: Path, *, eligible_count=12, policy=None):
     policy = policy or SelectionPolicy()
     rows, instruments = [], {}
     symbols = [f"TECH{n:02}" for n in range(eligible_count)]
+    symbols += list(extra_symbols)
     symbols += ["ETF", "ADR", "OTC", "UNKNOWN", "CHEAP", "ILLIQUID", "SHORT", "ALTERNATE"]
     for symbol in symbols:
         share = "TECH00" if symbol == "ALTERNATE" else symbol

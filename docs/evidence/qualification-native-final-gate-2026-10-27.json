@@ -1,0 +1,94 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-10-27T12:39:01.541204+00:00",
+  "implementation_sha256": "0e2b002a8b238afd50ba90dfe139809b5986442a97a178d8e79c3e8b16454728",
+  "fixture_release_sha256": "b45f53dc552e97864f32aec298361ac9b5d7634082b68f52807b1e96ed39c02d",
+  "qualification_sha256": "6cb875a5e8fb8ed99fa09ff22262b317b44baa1c25b19a909c512591a9e5b9f2",
+  "validation": {
+    "full_checklist_passed": 584,
+    "full_checklist_skipped": 0,
+    "full_checklist_errors": 0,
+    "full_checklist_failures": 0,
+    "final_focused_passed": 298,
+    "sequence": "Full checklist passed; final query2 profile endpoint correction followed by focused suite"
+  },
+  "qualification_gate": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "INVENTORY_INCOMPLETE_OR_INCONSISTENT",
+      "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING",
+      "IDENTITY_UNRESOLVED_OR_INCONSISTENT",
+      "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE",
+      "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE",
+      "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED",
+      "WORKLOAD_UNVERIFIED_OR_EXHAUSTED",
+      "LIVE_EVIDENCE_REQUIRED"
+    ],
+    "gates": {
+      "contract": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "freshness": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "inventory": {
+        "status": "FAIL",
+        "reasons": [
+          "INVENTORY_INCOMPLETE_OR_INCONSISTENT"
+        ]
+      },
+      "classification": {
+        "status": "FAIL",
+        "reasons": [
+          "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING"
+        ]
+      },
+      "identity": {
+        "status": "FAIL",
+        "reasons": [
+          "IDENTITY_UNRESOLVED_OR_INCONSISTENT"
+        ]
+      },
+      "history_liquidity": {
+        "status": "FAIL",
+        "reasons": [
+          "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE"
+        ]
+      },
+      "rights": {
+        "status": "FAIL",
+        "reasons": [
+          "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE"
+        ]
+      },
+      "provenance": {
+        "status": "FAIL",
+        "reasons": [
+          "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED"
+        ]
+      },
+      "workload": {
+        "status": "FAIL",
+        "reasons": [
+          "WORKLOAD_UNVERIFIED_OR_EXHAUSTED"
+        ]
+      },
+      "origin": {
+        "status": "FAIL",
+        "reasons": [
+          "LIVE_EVIDENCE_REQUIRED"
+        ]
+      }
+    }
+  },
+  "milestone": {
+    "complete": false,
+    "blockers": [
+      "LIVE_SMOKE_NOT_OBSERVED",
+      "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+    ]
+  }
+}
