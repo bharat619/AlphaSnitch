@@ -588,6 +588,7 @@ def implementation_hash():
         "qualification_budget.py",
         "qualification_plan.py",
         "qualification_yahoo.py",
+        "qualification_history.py",
         "universe.py",
         "universe_spike.py",
         "universe_policy.py",

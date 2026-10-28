@@ -40,6 +40,30 @@ now recomputes versioned qualification gates; current UNKNOWN provider rights
 and unmeasured population evidence keep acceptance blocked. AAPL/SPY smoke success and synthetic top-ten
 selection cannot clear these blockers. No paid provider upgrade is part of this release.
 
+### History measurement automation (2026-10-28)
+
+The [pilot runbook](pilot-qualification.md#candidate-and-benchmark-history-measurement)
+now includes offline history-request preparation and a bounded `measure` stage.
+It acquires independent candidate/SPY windows, records cold and metadata-fresh warm
+full-refetch counts, preserves partial failures, and creates the immutable export
+consumed by final qualification. No manual price snapshots or guessed workload
+measurements are required. Reviewed identity/history symbol intervals are still
+inputs, and unverified publication timing remains an error.
+
+The new [preflight](evidence/pilot-qualification-history-preflight-2026-10-28.json)
+records zero provider requests and FAIL. Rights, actual live coverage, publication
+and feed qualification remain unresolved. See the [external evidence checklist
+and provider request drafts](provider-permissions.md). No provider has been
+contacted and no live collection was performed. Earlier observations are unchanged.
+
+The [history-stage release checklist](evidence/foundation-qualification-history-release-2026-10-28.json)
+records **593 passed, zero failures/errors/skips**, all expected test IDs reconciled,
+and the [fresh-process reopen checklist](evidence/foundation-qualification-history-reopen-2026-10-28.json)
+passing. The feature worktree was dirty at base commit `8838d3e`; this is a local
+fixture verification, not a clean-checkout or live-qualification claim. The first
+sandboxed attempt could not connect to disposable PostgreSQL (85 setup errors);
+the rerun with local-server access passed. The application database was not used.
+
 ## Reproduce from a clean checkout
 
 Use Python 3.12, uv, Docker Compose and PostgreSQL 18. Run from the checkout root:

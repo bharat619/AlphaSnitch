@@ -498,7 +498,7 @@ def qualify_universe(
     ctx: typer.Context,
     output: Path = typer.Option(..., help="New directory for aggregate coverage findings."),
     mode: str = typer.Option(
-        "plan", help="plan, inventory, enrich, or execute; live modes require a manifest."
+        "plan", help="plan, inventory, enrich, measure, or execute; live modes require a manifest."
     ),
     manifest: Path | None = typer.Option(None, help="Reviewed qualification workload JSON."),
     manifest_sha256: str | None = typer.Option(
@@ -545,9 +545,9 @@ def qualify_universe(
             raise ValueError(
                 "Choose a new output directory; previous findings cannot be overwritten"
             )
-        if mode not in ("plan", "inventory", "enrich", "execute") or profile_limit:
+        if mode not in ("plan", "inventory", "enrich", "measure", "execute") or profile_limit:
             raise ValueError(
-                "Use plan, inventory, enrich or execute; profile samples cannot qualify coverage"
+                "Use plan, inventory, enrich, measure or execute; samples cannot qualify coverage"
             )
         if manifest is not None:
             workload = WorkloadManifest.model_validate_json(manifest.read_text())
@@ -596,6 +596,12 @@ def qualify_universe(
             )
         if mode == "plan" or preflight(workload, now=datetime.now(UTC), stage=mode):
             report = observe_blocked(output, workload, mode=mode)
+        elif mode == "measure":
+            from stock_analyser.qualification_history import collect_histories
+
+            if population_inputs is None:
+                raise ValueError("History measurement requires reviewed history input requests")
+            report = collect_histories(output, workload, population_inputs)
         elif mode == "enrich":
             if inventory_inputs is None or identity_mappings is None:
                 raise ValueError(

@@ -90,10 +90,70 @@ refinement. Reviewed ceilings are never raised automatically. Metadata enrichmen
 may run within its separately calculated prefix budget; history remains prohibited
 until its full refined plan fits the reviewed limits.
 
-Final qualification consumes the existing immutable `UniverseSnapshot` format and
-retained completed-history evidence, plus independent SPY benchmark and actual
-cold/warm measurements. These are supplied using the existing selection/collection
-contracts; metadata enrichment alone does not claim to have collected prices.
+### Candidate and benchmark history measurement
+
+The offline preparation command constructs history requests from retained enrichment
+and reviewed instrument definitions. The instrument file is a private JSON object
+keyed by reference ticker; each value follows the existing `Instrument` contract
+(immutable listing/security UUIDs, market, venue, symbol, currency and dated
+`provider_symbols`). Include every supported reference listing and SPY. Massive
+symbol intervals must cover the entire history window; a current reference ticker
+or Yahoo profile alone does not establish historical rename mapping. Definitions
+must come from reviewed identity evidence, not guessed ticker aliases.
+
+```sh
+uv run --locked python scripts/prepare_qualification_history.py \
+  --enrichment-dir /private/tmp/us019-enrichment \
+  --manifest /private/tmp/us019-enrichment/enrichment-workload.json \
+  --instruments /absolute/path/to/reviewed-instruments.json \
+  --output /private/tmp/us019-history-plan
+shasum -a 256 /private/tmp/us019-history-plan/history-workload.json
+# Only after rights and the exact manifest are reviewed:
+uv run --locked stock-analyser qualify-universe --mode measure \
+  --manifest /private/tmp/us019-history-plan/history-workload.json \
+  --manifest-sha256 EXACT_FILE_SHA256 \
+  --population-inputs /private/tmp/us019-history-plan/private/history-inputs.json \
+  --output /private/tmp/us019-history
+```
+
+Preparation performs no provider requests. With UNKNOWN rights it refuses to read
+the detailed inputs. Measurement also checks rights before loading credentials or
+opening input files. Both commands refuse existing output directories. Input bytes
+and the complete calculated plan must match the reviewed manifest.
+
+`measure` fetches every distinct qualified Technology security and the independently
+verified SPY benchmark for each policy-required daily/weekly window. It repeats the
+fetches for a warm phase with metadata already available; these are **same-window
+full refetch measurements**, not next-session cache-performance claims. Inventory
+and enrichment requests and elapsed review time carry into the shared budget.
+No retries, sources, caps, policy thresholds, or permissions are silently changed.
+
+`measurements.json` records required/attempted/valid/invalid/failed/not-attempted
+windows and HTTP/time deltas for each phase. Handled failures, interruption and
+budget exhaustion preserve an aggregate FAIL and the private completed evidence.
+Existing price validation and universe replay compute history completeness and
+60-session traded value. Warm work is not marked measured when only cold work ran.
+Synthetic adapters are available only to offline tests and never grant live PASS.
+
+The native Massive provider still labels publication timing `PUBLICATION_UNVERIFIED`.
+This remains an error in retained snapshots; preparation uses an unverified cutoff
+policy and never promotes it to observed. Current calendar/feed support and actual
+source publication evidence remain qualification requirements. Complete downloads
+therefore do not by themselves imply full history qualification.
+
+The command saves immutable snapshots under `private/`, builds
+`private/population-export.json`, and binds its hash and actual source/account
+records into `execution-workload.json`. Re-evaluation does not recollect data:
+
+```sh
+uv run --locked stock-analyser qualify-universe --mode execute \
+  --manifest /private/tmp/us019-history/execution-workload.json \
+  --manifest-sha256 EXACT_FILE_SHA256 \
+  --population-inputs /private/tmp/us019-history/private/population-export.json \
+  --output /private/tmp/us019-qualified
+```
+
+The existing import path also accepts a separately reviewed complete export:
 
 ```sh
 uv run --locked stock-analyser qualify-universe --mode plan \
@@ -227,6 +287,8 @@ Each operation needs source/version/date and document hash or written-confirmati
 reference, review/expiry dates, exact account/product scope, retention duration
 (current intended replay period: 365 days), permitted use and no unresolved
 conditions. Working API access and software licenses are not rights evidence.
+The [permission request drafts and closure checklist](provider-permissions.md)
+describe the external evidence still needed. No provider message has been sent.
 Also required before pilot PASS: complete live inventories, classifications and
 mappings, supported calendars/feeds/publication evidence, actual candidate and
 benchmark coverage, and measured cold/warm workload within reviewed limits.
@@ -297,3 +359,34 @@ At observation time contract/freshness PASS; inventory, classification, identity
 history/liquidity, rights, provenance, workload and live-origin FAIL. Massive and
 Yahoo HTTP attempts are both zero. All eleven earlier committed observations are
 unchanged. Live acceptance and the release milestone remain blocked.
+
+### History-stage verification (2026-10-28)
+
+The implementation adds nine regressions covering complete cold/warm measurement
+and export replay, insufficient bars, publication uncertainty, provider failure,
+deadline/interruption/rights-expiry stops, unknown-rights zero dispatch, corrupted
+inputs/live fixture rejection, and offline preparation from reviewed identities.
+The focused suite passed **307 tests**; after final metadata-source/date checks,
+all nine new tests passed again. The final full disposable-PostgreSQL checklist
+passed **593 tests with zero failures/errors/skips**, exact suite reconciliation
+and fresh-process reopen PASS. Ruff lint/format and diff checks passed.
+
+The command used for the final full checklist was:
+
+```sh
+STOCK_ANALYSER_TEST_DATABASE_URL=postgresql+psycopg://stock_analyser:local-test-password@127.0.0.1:55437/stock_analyser \
+  .venv/bin/python scripts/foundation_release.py \
+  --output /private/tmp/alphasnitch-us019-history-release-002 \
+  --qualification-evidence /private/tmp/alphasnitch-us019-history-preflight-002/findings.json
+```
+
+The exact inputs/results are retained separately as the
+[preflight](evidence/pilot-qualification-history-preflight-2026-10-28.json),
+[release](evidence/foundation-qualification-history-release-2026-10-28.json), and
+[reopen](evidence/foundation-qualification-history-reopen-2026-10-28.json) observations.
+The copied preflight SHA-256 is
+`9431737cdd8d84e3aee5bb2f6a4c4e3698c126994b42e87bf500b1d2214ee3ea`.
+Source was a dirty feature worktree at `8838d3e`, with exact implementation hashes
+recorded in the qualification evidence. This does not claim a clean installation.
+All prior observations remain unchanged. There were zero provider calls and no
+provider correspondence, permission grant, subscription purchase or upgrade.
