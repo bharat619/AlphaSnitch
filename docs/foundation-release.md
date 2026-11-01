@@ -1,5 +1,10 @@
 # Foundation release verification (US-018)
 
+The [1 November 2026 verification](phase-1-verification-2026-11-01.md) records the
+current ten-task acceptance outcome, recovery drill, report-history correction and
+remaining live gates. The [Phase 2 handoff](phase-2-handoff.md) is a review draft;
+strategy parameters and the calculation implementation are not yet frozen.
+
 This foundation collects and preserves data-readiness evidence and records confirmed
 offline executions. Indicators, setups, debate and verdict remain `NOT_RUN`.
 Passing fixtures establishes reproducibility of the implemented contracts, not
@@ -125,6 +130,16 @@ uv run --locked stock-analyser --data-dir /tmp/foundation-demo report show RUN_U
 uv run --locked stock-analyser --data-dir /tmp/foundation-demo scan resume RUN_UUID
 uv run --locked stock-analyser --data-dir /tmp/foundation-demo report regenerate RUN_UUID
 ```
+
+Report history lists combined scans and standalone runs. Internal stock/benchmark
+collection runs referenced by Buy/Sell scans do not consume the history limit or
+appear as missing reports. Their outcomes remain in the combined scan report.
+Standalone or combined runs with genuinely missing artifacts remain visible with
+the regeneration instruction. Repair the original recorded artifact destination
+before retrying: changing the reports-directory configuration does not relocate
+already recorded artifact paths. Retrying a failed scan can publish a new report
+generation; earlier report files remain immutable. Regenerating an unchanged
+completed run preserves its artifact hashes.
 
 Do not confirm synthetic executions into a real portfolio. The checklist creates
 them only inside its disposable database.

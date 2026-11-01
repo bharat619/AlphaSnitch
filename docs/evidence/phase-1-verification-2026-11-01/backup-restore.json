@@ -1,0 +1,8 @@
+{
+  "status": "PASS",
+  "database_dump_sha256": "a4bf53df691d653ff9dd99d67f942dd07221e976376c82fa86f2942097b184e2",
+  "runtime_files_restored": 539,
+  "runtime_hashes_match": true,
+  "original_runtime_preserved": true,
+  "restored_database": "phase1_restored"
+}
