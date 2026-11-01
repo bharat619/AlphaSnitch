@@ -213,6 +213,8 @@ To enforce this before merging, `main` branch protection must require the `Tests
 
 ## Documentation
 
+- [Phase 1 verification](docs/phase-1-verification-2026-11-01.md): executed acceptance checks, recovery evidence, report-history fix and remaining live blockers.
+- [Phase 2 handoff](docs/phase-2-handoff.md): calculation contracts, proposed conventions, required owner decisions and implementation order.
 - [Architecture](ARCHITECTURE.md): CLI workflows, agents, deterministic technical analysis, market/provider contracts, database, portfolio recording, report artifacts, validation and implementation phases.
 - [Next-phase implementation plan](IMPLEMENTATION_PLAN.md): proposed data and CLI foundation, ordered work packages, dependencies, decision gates, and acceptance scenarios.
 - [Development user stories](planning/github-issues/README.md): deliverable-sized GitHub issue drafts, acceptance criteria, execution order, and publication tracking.

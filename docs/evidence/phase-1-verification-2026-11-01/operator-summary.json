@@ -1,0 +1,134 @@
+{
+  "status": "PASS",
+  "runs": [
+    {
+      "scenario": "valid",
+      "run_id": "1e595543-915d-49f9-94ab-f18bd26f1541",
+      "count": 10,
+      "status": "SUCCEEDED",
+      "hashes": {
+        "manifest.json": "d0be0a6dda5272ea0cb109eab4e965970293392464470c1d993986b6ecc1a122",
+        "report.json": "e7badcac05a99c2a83ff54d5be68954645e7a87a9730ee949ec4bb5b1bac1822",
+        "report.md": "bf47623ab892760849bfb2752ed4804e78e863dd90f3dbb99244eed3190a5626"
+      }
+    },
+    {
+      "scenario": "shortfall",
+      "run_id": "08bf44ab-d9c1-4d8b-b047-7a64a5f4078b",
+      "count": 3,
+      "status": "SUCCEEDED",
+      "hashes": {
+        "manifest.json": "62754854da3f1fd6d640908552030469f458e7deea34ea672dbdee98045fa3dd",
+        "report.json": "622dd2327b0d22791e45317689ce5e8d0e3b080b7ba3dd367d9516fb100d708e",
+        "report.md": "083a9de9ecca510df2e4219cb771d342ef88a6da6ce1be5a0dbd3354a50cee2f"
+      }
+    },
+    {
+      "scenario": "zero",
+      "run_id": "bc1f2b4f-e5f9-40c4-b94a-6f845d6868b2",
+      "count": 0,
+      "status": "SUCCEEDED",
+      "hashes": {
+        "manifest.json": "804bc917326b2fd8ece1fc101cc6bafcc66d4e594b26a91b25d49301cfd3145a",
+        "report.json": "ed71148e06da1e325e4114c4543d017d1c143c580c637af3269c3b7fd172d2f0",
+        "report.md": "0483aa40587f594cd2992772cd1017bd10189fd0c73f376307f13a6ed9fc7136"
+      }
+    },
+    {
+      "scenario": "one-stock-failure",
+      "run_id": "d7e8d79f-26a2-447d-b0ca-566b1e33539e",
+      "count": 10,
+      "status": "PARTIAL",
+      "hashes": {
+        "manifest.json": "12fbe5a4e36ab5b95fd83197b5ef0ca442a01fafb25a5c779ea9042e72765354",
+        "report.json": "a23ba11fad05eccb749b9b2eeae4f0a2a1b81baa4a411774d95c8d3e18dc98a8",
+        "report.md": "2b413ce4baac12d29a5d7fa33c4c9c14345e6a2922eee941081eb05c6358cb42"
+      }
+    },
+    {
+      "scenario": "unassessable",
+      "run_id": "e1daabf6-ca9d-49be-9dfa-c447901c95a5",
+      "count": 10,
+      "status": "PARTIAL",
+      "hashes": {
+        "manifest.json": "24c52548e8d6465f7e664964c7e333dbdae9cbe1bb76639e66f8c15209a70ac2",
+        "report.json": "6324407065aa7abaf46fe24a8a40cfbb2aa4e369f19a0e2939692f245a55c219",
+        "report.md": "3fc904330d44b749b0aaa5e05033cbf8593b4d9977a6c8c66b84e5092633cb89"
+      }
+    },
+    {
+      "scenario": "sell-valid",
+      "run_id": "46e66df0-b426-4c4d-a814-7e31f6ceb4db",
+      "count": 1,
+      "status": "SUCCEEDED",
+      "hashes": {
+        "manifest.json": "d6ac63c049ceee5b213a439faa366b5f466d6ff69a659a651ab8139f259538c4",
+        "report.json": "a0a56f488cae16c760eb5aec451f4bc6b7a82be982d914475c7accf45cafbe8a",
+        "report.md": "19173d4ce8f4ab69210c717f83e8bfa5abaceb7ac2ee57c9d075d7c74d388de5"
+      }
+    },
+    {
+      "scenario": "sell-one-holding-failure",
+      "run_id": "193b6c42-f590-4ca6-bbf1-82d47b19926e",
+      "count": 1,
+      "status": "FAILED",
+      "hashes": {
+        "manifest.json": "8dd9f622d97b029391e1844ce76dfa30c923773f30396adaa8f001f3960ceb0b",
+        "report.json": "2a3212d1a83c2a827adb4f018fa1d934b1e35823247547d71bb8d0c082e0e0bf",
+        "report.md": "13bca117e775332879507bc26e0302a4d88db0c5b89535fcbd127ff61c1d799a"
+      }
+    },
+    {
+      "scenario": "report-write-recovery",
+      "run_id": "15844ffa-3158-4011-9cdb-2489cbec5b9d",
+      "status": "SUCCEEDED",
+      "hashes": {
+        "manifest.json": "a0bb3b4e073347e04082bfec52f6b9d63c48fbd089e820f3a2882ca3dddb0c39",
+        "report.json": "42b2e660ef50a29ef1881635cae0d19a8552b2173ac2c4a9ef7f90bf09740bc3",
+        "report.md": "a34f1ecff019900a94fe47ccd11f03e433419618312867dba8f6fa6e49b5d23f"
+      }
+    }
+  ],
+  "portfolio": {
+    "positions": [
+      {
+        "schema_version": "1",
+        "instrument_id": "396931b8-d33b-5462-8bc6-a7af1d0e9e1d",
+        "venue": "XNAS",
+        "currency": "USD",
+        "quantity": "6",
+        "cost_basis": "600",
+        "realized_pnl": "40",
+        "accounting_complete": true,
+        "lots": [
+          {
+            "schema_version": "1",
+            "execution_id": "d5c4abb6-2d28-4c79-b9b3-296fdff34e48",
+            "quantity": "6",
+            "cost_basis": "600"
+          }
+        ],
+        "reconciliation_required": []
+      }
+    ],
+    "revision": "b8ebd03e41be3be3c2f907b803668c5355177c04b077e864419de5452e6b8dbd"
+  },
+  "history_after_fix": {
+    "rows": 5,
+    "incomplete_rows": 0,
+    "saved_rows": 5
+  },
+  "universe_replay_equal": true,
+  "report_write_recovered": true,
+  "scope": "Synthetic fixtures only; isolated PostgreSQL on port 55440; no application database accessed",
+  "cli_calls": 38,
+  "restore_cli_calls": 12,
+  "restored_reports": 8,
+  "restored_portfolio_exact_match": true,
+  "restored_receipts_exact_match": true,
+  "receipt_hashes": {
+    "audit-buy": "dd0dc13613b82d958e9c45ae64c99c8faeef446e3f65eb9dab8161b2ed90f435",
+    "audit-sell": "f1ddbe3952cdda2296b1bcef51e4ce371e1a89d77e15e97c5307be5aacc6051c"
+  },
+  "local_logs": "/private/tmp/phase1-audit-operator-verified"
+}

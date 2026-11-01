@@ -1,0 +1,111 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-11-01T11:17:55.351364+00:00",
+  "source_commit": "6978c8dc12aa45f370e56ad26906cb2918daa814",
+  "source_tracked_dirty": true,
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "fixture_readiness": {
+    "tests": 595,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 595,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "e90c4c4e60e865fe88d09f7ba775655af11f1455262934c17c4c3e39a3ac22b1",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "live_observation": {
+    "status": "NOT_RUN",
+    "publication_timing": "unverified"
+  },
+  "pilot_sector": {
+    "status": "FAIL",
+    "full_sector_accepted": false,
+    "blockers": [
+      "INVENTORY_INCOMPLETE_OR_INCONSISTENT",
+      "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING",
+      "IDENTITY_UNRESOLVED_OR_INCONSISTENT",
+      "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE",
+      "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE",
+      "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED",
+      "WORKLOAD_UNVERIFIED_OR_EXHAUSTED",
+      "LIVE_EVIDENCE_REQUIRED"
+    ],
+    "gates": {
+      "contract": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "freshness": {
+        "status": "PASS",
+        "reasons": []
+      },
+      "inventory": {
+        "status": "FAIL",
+        "reasons": [
+          "INVENTORY_INCOMPLETE_OR_INCONSISTENT"
+        ]
+      },
+      "classification": {
+        "status": "FAIL",
+        "reasons": [
+          "CLASSIFICATION_INCOMPLETE_OR_CONFLICTING"
+        ]
+      },
+      "identity": {
+        "status": "FAIL",
+        "reasons": [
+          "IDENTITY_UNRESOLVED_OR_INCONSISTENT"
+        ]
+      },
+      "history_liquidity": {
+        "status": "FAIL",
+        "reasons": [
+          "HISTORY_LIQUIDITY_OR_SELECTION_INCOMPLETE"
+        ]
+      },
+      "rights": {
+        "status": "FAIL",
+        "reasons": [
+          "RIGHTS_UNKNOWN_DENIED_STALE_OR_WRONG_SCOPE"
+        ]
+      },
+      "provenance": {
+        "status": "FAIL",
+        "reasons": [
+          "ACTUAL_SOURCE_DATASET_OR_ACCOUNT_UNVERIFIED"
+        ]
+      },
+      "workload": {
+        "status": "FAIL",
+        "reasons": [
+          "WORKLOAD_UNVERIFIED_OR_EXHAUSTED"
+        ]
+      },
+      "origin": {
+        "status": "FAIL",
+        "reasons": [
+          "LIVE_EVIDENCE_REQUIRED"
+        ]
+      }
+    }
+  },
+  "pilot_sector_source": {
+    "kind": "explicit_qualification",
+    "reference": "/private/tmp/phase1-audit-preflight/findings.json",
+    "sha256": "42b83267297b3b5edbc5fbfaa3b888a29ff07c791f8a742b30dc69616768b106"
+  },
+  "milestone": {
+    "complete": false,
+    "blockers": [
+      "LIVE_SMOKE_NOT_OBSERVED",
+      "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+    ]
+  },
+  "limitations": "Data readiness only; no recommendation or production reliability claim"
+}

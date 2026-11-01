@@ -807,7 +807,7 @@ def display_report_history(runtime: Runtime, limit: int = 20) -> None:
     database = report_database(runtime)
     try:
         with database.read() as repo:
-            runs = repo.list_runs(limit)
+            runs = repo.list_runs(limit, include_collection_children=False)
         if not runs:
             display("No report history yet.")
         service = ReportService(database, runtime.reports_dir)

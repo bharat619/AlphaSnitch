@@ -68,6 +68,66 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
 
 
+@pytest.mark.parametrize("scope", ["buy_collection", "sell_collection"])
+def test_report_history_excludes_children_before_limit_and_keeps_missing_reports(
+    database, tmp_path, monkeypatch, scope
+):
+    from stock_analyser.reports import ReportService
+
+    database.initialize()
+    parent_id = create_fixture_run(database)
+    with database.read() as repo:
+        template = repo.get_run(parent_id)
+    child_ids = [uuid4(), uuid4()]
+    parent = template.model_copy(
+        update={
+            "run_id": uuid4(),
+            "created_at": template.created_at + timedelta(seconds=1),
+            "configuration": {
+                scope: {
+                    "child_run_ids": [str(child_ids[0])],
+                    "shared_context": [{"run_id": str(child_ids[1])}],
+                }
+            },
+        }
+    )
+    with database.write() as repo:
+        repo.create_run(parent)
+        for offset, child_id in enumerate(child_ids, 2):
+            repo.create_run(
+                template.model_copy(
+                    update={
+                        "run_id": child_id,
+                        "created_at": template.created_at + timedelta(seconds=offset),
+                    }
+                )
+            )
+    # A standalone run with a genuine missing report stays visible. Generate it
+    # only after checking that history preserves the recovery instruction.
+    monkeypatch.setenv(
+        "STOCK_ANALYSER_DATABASE_URL", database.engine.url.render_as_string(hide_password=False)
+    )
+    config = tmp_path / "config.toml"
+    config.write_text('market = "US"\n')
+    prefix = ["--config", str(config), "--data-dir", str(tmp_path), "report", "history"]
+    with database.read() as repo:
+        assert len(repo.list_runs(10)) == 4
+        assert [r.run_id for r in repo.list_runs(1, include_collection_children=False)] == [
+            parent.run_id
+        ]
+    result = CliRunner().invoke(app, [*prefix, "--limit", "2"])
+    assert result.exit_code == 0, result.output
+    assert str(parent_id) in result.output
+    assert str(parent.run_id) in result.output
+    assert "INCOMPLETE" in result.output
+    assert all(str(child_id) not in result.output for child_id in child_ids)
+    ReportService(database, tmp_path / "reports").generate(parent_id)
+    result = CliRunner().invoke(app, [*prefix, "--limit", "2"])
+    assert result.exit_code == 0, result.output
+    standalone = next(line for line in result.output.splitlines() if str(parent_id) in line)
+    assert "report=SAVED" in standalone
+
+
 def test_foundation_release_fresh_process_checklist(database, tmp_path):
     """Configuration, migration, buy/trade/sell, interrupted resume and offline reopen."""
     import hashlib

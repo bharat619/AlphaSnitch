@@ -175,13 +175,37 @@ class Repositories:
     def get_run(self, run_id: UUID) -> RunRecord:
         return self._get(s.runs, s.runs.c.run_id == run_id, RunRecord)
 
-    def list_runs(self, limit: int = 20) -> tuple[RunRecord, ...]:
+    def list_runs(
+        self, limit: int = 20, *, include_collection_children: bool = True
+    ) -> tuple[RunRecord, ...]:
         if not 1 <= limit <= 1000:
             raise ValueError("History limit must be between 1 and 1000")
+        query = sa.select(s.runs.c.payload)
+        if not include_collection_children:
+            parent = s.runs.alias("parent_run")
+            child_id = sa.cast(s.runs.c.run_id, sa.Text)
+            references = []
+            for scope in ("buy_collection", "sell_collection"):
+                config = parent.c.payload["configuration"][scope]
+                references.extend(
+                    (
+                        config["child_run_ids"].contains(sa.func.jsonb_build_array(child_id)),
+                        config["shared_context"].contains(
+                            sa.func.jsonb_build_array(
+                                sa.func.jsonb_build_object("run_id", child_id)
+                            )
+                        ),
+                    )
+                )
+            # Filter before LIMIT, including references from older parent runs.
+            # Standalone runs with failed report writes must remain visible.
+            query = query.where(
+                ~sa.exists(sa.select(1).select_from(parent).where(sa.or_(*references)))
+            )
         values = self.connection.scalars(
-            sa.select(s.runs.c.payload)
-            .order_by(s.runs.c.payload["created_at"].astext.desc(), s.runs.c.run_id)
-            .limit(limit)
+            query.order_by(s.runs.c.payload["created_at"].astext.desc(), s.runs.c.run_id).limit(
+                limit
+            )
         )
         return tuple(RunRecord.model_validate(value) for value in values)
 
