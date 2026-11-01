@@ -2,6 +2,8 @@
 
 Planning date: 10 October 2026. Status updated 1 November 2026: the Phase 1 data/CLI foundation is implemented with PostgreSQL. Fixture acceptance and live-sector qualification are separate gates; live qualification remains incomplete. Technical analysis and agent debate are planned subsequent phases. See [Phase 1 verification](docs/phase-1-verification-2026-11-01.md) and the [Phase 2 handoff](docs/phase-2-handoff.md).
 
+Current implementation checkpoint: Phase 1 verification [PR #40](https://github.com/bharat619/AlphaSnitch/pull/40) is merged. Phase 2 begins with [Issue #41](https://github.com/bharat619/AlphaSnitch/issues/41), which specifies prior-high and relative-volume observations, availability and causal timestamps. Its implementation has not started. Read the handoff's **Resume here** section for the current task, owner review expectations and acceptance/verification requirements for every issue. The original 20-session/1.5x-volume breakout example is an unvalidated illustration, not an enabled policy or production default.
+
 ## Confirmed scope
 
 - Local CLI for US equities, targeting swing trades lasting days to weeks.
@@ -279,6 +281,8 @@ Use a versioned IndicatorRegistry to declare each feature's identifier, paramete
 
 Each observation has a value or an explicit availability status with a reason. Never convert undefined RSI/stochastic values, zero-volume denominators, or insufficient history into a neutral or bullish signal. A missing mandatory feature blocks that strategy's candidate decision; a missing optional feature is disclosed and handled by its predefined policy.
 
+Keep observations independently assessable: missing volume can make relative volume unavailable while independently valid price observations remain available. Whole-packet integrity failures still block use of the affected evidence. Observation availability must not precede proven availability of its required inputs; exchange close, source retrieval and publication evidence are distinct. Unknown historical publication timing cannot be turned into a known earlier backtest timestamp.
+
 ### Price-action definitions
 
 Price-action labels require versioned detectors, not free-form visual assertions by the agents. Specify and test these rule templates before enabling a strategy:
@@ -292,11 +296,23 @@ Price-action labels require versioned detectors, not free-form visual assertions
 
 Thresholds and windows belong to configuration and are evaluation hypotheses. A reported pattern must reference its detector version, input evidence, and confirmation time.
 
+The first Phase 2 increment computes a prior-window high, prior mean volume,
+relative volume, closing-price distance and strict above-level observation using
+independent explicit lookbacks. Both baselines exclude the current session. A
+rolling-high observation does not establish multi-touch resistance or consolidation.
+Neither a 1.5x volume gate nor a zero-buffer/one-close strategy is enabled by this
+increment. A later versioned detector/policy must explicitly specify buffer,
+persistence, volume and session-duration rules and evaluate their effects under
+predeclared execution/cost and held-out-data assumptions before trading reliance.
+For #41, shortened sessions in the current or volume-reference window make RVOL
+unavailable without automatically invalidating valid price observations; do not
+silently normalize duration or substitute older full sessions.
+
 ### Strategy selection and evidence grouping
 
 An explicit pipeline runs after calculation: detect setups → apply the configured strategy profiles → produce grouped supporting/opposing evidence → run debate → enforce final gates.
 
-Initially enable trend-following breakout and pullback profiles with their own entry and exit policies. Range/mean-reversion and reversal profiles remain disabled until separately defined and evaluated. The indicator library can still expose their descriptive features.
+The initial strategy scope is trend-following breakout and pullback profiles with their own entry and exit policies. Their parameters and evaluation criteria must be specified before activation; Issue #41 only implements underlying observations. Range/mean-reversion and reversal profiles remain disabled until separately defined and evaluated. The indicator library can still expose their descriptive features.
 
 Define a versioned StrategyPolicy with eligible market regimes, mandatory/optional features, setup rules, entry/exit conditions, disqualifiers, group weights or caps, missing-data behavior, and explanation rules. Save the selected policy before debate. Agents may challenge its applicability but cannot change parameters or choose whichever strategy makes a stock look attractive. If several profiles are enabled, preserve their separate assessments and use a predefined conflict-resolution rule.
 

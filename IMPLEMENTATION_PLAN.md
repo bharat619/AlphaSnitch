@@ -143,10 +143,19 @@ India provider selection, multi-market user flows, additional strategy families,
 
 ## Handoff to subsequent phases
 
+**Current next task (1 November 2026):** Phase 1 verification PR #40 is merged.
+Implement [Issue #41](https://github.com/bharat619/AlphaSnitch/issues/41): prior-high
+and relative-volume observations, independent availability, causal timestamps and
+an executable synthetic example. No Phase 2 code has been written. The original
+20-session/1.5x-volume example remains unvalidated; it is not an accepted production
+strategy. Follow [the Phase 2 session handoff](docs/phase-2-handoff.md#resume-here-in-a-new-session)
+for the exact scope, owner review points, testing requirements and live blockers.
+Every new issue must include acceptance criteria and testing/verification steps.
+
 - **Phase 2 — deterministic analysis:** implement the full configured indicator library with availability reasons, causal detectors, and separate breakout/pullback buy and exit policies. Produce evidence-rich technical assessments; validate known fixtures and absence of look-ahead before adding debate.
 - **Phase 3 — agent debate:** integrate Bedrock and LangGraph, structured challenger/defender/judge outputs, evidence validation, mandatory final gates, budgets, and per-stock checkpoint recovery.
 - **Phase 4 — complete user workflow:** add candidate-linked intents, execution reconciliation, existing-holding import, and the remaining report/history interactions.
 - **Phase 5 — evaluation before reliance:** compare deterministic strategy versus strategy plus debate using predefined held-out/paper-observation criteria, costs, drawdowns, evidence errors, consistency, latency, and model expense. Point-in-time research limitations remain explicit.
 - **Phase 6 — India:** qualify its data sources, calendars, venues, currency handling, and strategy profiles before enabling the market.
 
-**First implementation task:** F1 followed immediately by F2. The first reviewable result should be an installable CLI that saves and reopens a one-instrument fixture report. That establishes the contracts and audit trail before live provider complexity or model expense is added.
+**Historical Phase 1 starting task:** F1 followed immediately by F2 established the installable CLI and saved/reopened one-instrument fixture report. These foundation components are implemented; the current next task is Phase 2 Issue #41 above, while live Phase 1 qualification remains open.
