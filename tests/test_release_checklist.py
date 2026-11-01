@@ -100,5 +100,5 @@ def test_fixture_pass_never_implies_live_or_pilot_acceptance():
     )
     sector["gate"]["blockers"] = []
     assert (
-        release.release_gate({"passed": True}, {"status": "OBSERVED"}, sector)["complete"] is True
+        release.release_gate({"passed": True}, {"status": "OBSERVED"}, sector)["complete"] is False
     )

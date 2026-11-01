@@ -6,7 +6,15 @@ produce recommendations, or implement the subsequent persisted selection workflo
 A completed provider query and a successful test suite do not clear the gate.
 A curated list can only be called a **prototype** and cannot close this gate.
 
-## Repeat the bounded experiment
+## Current qualification workflow (US-019)
+
+Use [schema 2 pilot qualification](pilot-qualification.md) for current commands,
+criteria, offline planning, reviewed bounds and rights blockers. The command now
+defaults to offline preflight; nonzero historical profile samples are rejected.
+The following US-011 experiment describes historical v1 behavior and is retained
+for interpreting the immutable October 24 evidence.
+
+## Historical bounded experiment
 
 ```sh
 uv run --locked stock-analyser qualify-universe \

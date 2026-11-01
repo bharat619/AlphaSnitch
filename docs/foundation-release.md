@@ -35,9 +35,34 @@ mandatory fresh-process evidence, including its SHA-256 hash.
 **Release milestone remains blocked by pilot-sector coverage.** The existing
 [observed qualification](evidence/technology-universe-2026-10-24.json) fails
 classification completeness, cross-source identity mapping, history/liquidity
-measurement and retention-rights qualification. The current qualifier intentionally
-cannot grant full-sector acceptance. AAPL/SPY smoke success and synthetic top-ten
+measurement and retention-rights qualification. The historical v1 qualifier could not grant full-sector acceptance. Schema 2
+now recomputes versioned qualification gates; current UNKNOWN provider rights
+and unmeasured population evidence keep acceptance blocked. AAPL/SPY smoke success and synthetic top-ten
 selection cannot clear these blockers. No paid provider upgrade is part of this release.
+
+### History measurement automation (2026-10-28)
+
+The [pilot runbook](pilot-qualification.md#candidate-and-benchmark-history-measurement)
+now includes offline history-request preparation and a bounded `measure` stage.
+It acquires independent candidate/SPY windows, records cold and metadata-fresh warm
+full-refetch counts, preserves partial failures, and creates the immutable export
+consumed by final qualification. No manual price snapshots or guessed workload
+measurements are required. Reviewed identity/history symbol intervals are still
+inputs, and unverified publication timing remains an error.
+
+The new [preflight](evidence/pilot-qualification-history-preflight-2026-10-28.json)
+records zero provider requests and FAIL. Rights, actual live coverage, publication
+and feed qualification remain unresolved. See the [external evidence checklist
+and provider request drafts](provider-permissions.md). No provider has been
+contacted and no live collection was performed. Earlier observations are unchanged.
+
+The [history-stage release checklist](evidence/foundation-qualification-history-release-2026-10-28.json)
+records **593 passed, zero failures/errors/skips**, all expected test IDs reconciled,
+and the [fresh-process reopen checklist](evidence/foundation-qualification-history-reopen-2026-10-28.json)
+passing. The feature worktree was dirty at base commit `8838d3e`; this is a local
+fixture verification, not a clean-checkout or live-qualification claim. The first
+sandboxed attempt could not connect to disposable PostgreSQL (85 setup errors);
+the rerun with local-server access passed. The application database was not used.
 
 ## Reproduce from a clean checkout
 
@@ -138,13 +163,19 @@ database URL as well as the test URL, configure an existing `MASSIVE_API_KEY`, a
 uv run --locked python scripts/foundation_release.py --output /tmp/foundation-live-001 --live
 ```
 
-The live phase refreshes AAPL/SPY daily/weekly evidence using existing routing,
-then runs the universe spike with at most two pages per source and two classification
-profiles. Each command has a 180-second wall-clock limit; the existing Massive
-shared rate allowance, request budget, pagination bounds and cooldown remain in
-effect. These deliberately small bounds may truncate enumeration, which is failure
-evidence. yfinance SDK HTTP amplification is unknown. A timeout is an inconclusive
-failed observation, not absence of data. No news/model calls are requested.
+The live phase refreshes AAPL/SPY daily/weekly evidence using existing routing
+with a 180-second wall-clock limit. It no longer invokes a hard-coded sector sample.
+Current operator instructions keep affected live collection blocked because rights
+are UNKNOWN; do not use `--live` for this US-019 verification. No news/model calls
+are requested.
+
+Supply `--qualification-evidence /absolute/path/to/new/findings.json` to consume an
+explicit schema 2 qualification observation. The runner records the exact file hash
+and recomputes source/policy/criteria compatibility, counts, freshness, rights and
+all gates at consumption time. Historical v1 evidence remains the visible default
+and cannot pass. Synthetic all-PASS fixtures cannot qualify the live release.
+See [pilot qualification](pilot-qualification.md) for offline planning, reviewed
+inventory/population contracts, current source investigation and required permissions.
 
 `release.json` separates `fixture_readiness`, `live_observation`, `pilot_sector`
 and `milestone`. Runner exit zero means **fixture acceptance passed**; milestone
@@ -235,3 +266,64 @@ historical receipts and reports remain immutable.
   spike is evidence of gaps, not approval of a production universe.
 
 India and additional paid providers remain outside this release.
+
+
+## US-019 qualification handoff (2026-10-27)
+
+The new [preflight observation](evidence/pilot-qualification-preflight-2026-10-27.json)
+records UNKNOWN rights and zero provider dispatches. Inventory, classification,
+identity, history/liquidity, rights and workload gates remain FAIL. Preflight origin
+cannot qualify a live release. The policy/criteria and timestamp compatibility gate
+can pass for a fresh report; metadata freshness is reevaluated after 24 hours.
+The October 24 observations remain byte-for-byte unchanged. Fixture readiness,
+AAPL/SPY smoke, pilot qualification and milestone completion remain independent.
+No live smoke or broad provider run was performed for US-019 under UNKNOWN rights.
+
+The [US-019 fixture release result](evidence/foundation-qualification-release-2026-10-27.json)
+records **534 passed, zero errors/failures/skips**, exact suite reconciliation and
+mandatory fresh-process acceptance. The [new reopen evidence](evidence/foundation-qualification-reopen-2026-10-27.json)
+records the actual fixture artifact hashes. The initial sandboxed database attempt
+failed; the authorized run against the separate disposable server succeeded.
+Reproduction commands, exact preflight artifact hash, per-gate outcomes and measured
+versus unperformed workload are recorded in [pilot qualification](pilot-qualification.md).
+
+
+### Correctness review follow-up
+
+The f3438d5 fixture pass missed stale-window, actual-provider/account provenance,
+and shared transport deadline failures. See [qualification verification](pilot-qualification.md#verification-and-immutable-observations).
+Current criteria `us-technology-qualification-2` independently checks candidate and
+benchmark completed-session windows at qualification as-of and records an actual
+source/account provenance gate. Historical criteria-v1 observations remain
+unchanged and cannot qualify v2. Issue #38 remains operationally incomplete:
+Yahoo population collection and a complete automatically calculated population
+workload bound are still missing, independently of UNKNOWN account rights.
+
+The [review-fix release result](evidence/foundation-qualification-review-release-2026-10-27.json)
+records **553 passed, zero failures/errors/skips** and mandatory fresh-process
+acceptance. Its [reopen evidence](evidence/foundation-qualification-review-reopen-2026-10-27.json)
+and the [separate criteria-v2 preflight](evidence/pilot-qualification-review-2026-10-27.json)
+preserve the actual measurements. Live smoke was NOT_RUN, rights UNKNOWN, pilot
+FAIL and milestone incomplete. All previous observations remain unchanged.
+
+
+### Native collection and calculated planner follow-up
+
+Current criteria `us-technology-qualification-3` add native bounded Yahoo inventory/
+profile acquisition and a recomputed population workload plan. See
+[pilot qualification](pilot-qualification.md) for exact offline/live-stage contracts,
+operation/authentication/page limits, complete-reference enrichment, measured
+classification refinement, retained-data scope and source/account protections.
+The earlier review's Yahoo/planner gaps are superseded by this implementation.
+Actual live qualification remains unperformed under the operator's UNKNOWN rights
+instruction. Pilot and milestone acceptance remain FAIL; no provider purchase,
+quota increase or unreviewed broad run occurred.
+
+The native follow-up's [full checklist](evidence/foundation-qualification-native-release-2026-10-27.json)
+records **584 passed, zero failures/errors/skips**, exact suite reconciliation and
+mandatory fresh-process acceptance, with separate
+[reopen evidence](evidence/foundation-qualification-native-reopen-2026-10-27.json).
+Following the final Yahoo profile-host correction, all 298 focused tests passed.
+The [final gate recomputation](evidence/qualification-native-final-gate-2026-10-27.json)
+references that fixture record and the separately captured final-code preflight.
+No live calls occurred; permissions remain UNKNOWN and milestone acceptance FAIL.

@@ -591,3 +591,203 @@ def test_windows_lock_uses_first_byte_and_nonblocking_mode(tmp_path, monkeypatch
         stream.seek(0, 2)
         massive._lock_file(stream)
         assert calls == [(stream.fileno(), 2, 1, 0)]
+
+
+@pytest.mark.parametrize(
+    "connect_seconds,segments",
+    [
+        (4, [(4, b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n"), (8, b"{}")]),
+        # Frequent successful reads must not renew the allowance during header parsing.
+        (0, [(1, bytes([byte])) for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"]),
+        (8, [(8, b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")]),
+    ],
+)
+def test_transport_uses_one_deadline_for_connect_headers_and_body(
+    monkeypatch, connect_seconds, segments
+):
+    import io
+
+    import stock_analyser.massive as massive
+
+    clock = Clock()
+    clock.now = 0
+
+    class Socket:
+        timeout = 10
+        closed = False
+
+        def settimeout(self, seconds):
+            self.timeout = seconds
+
+        def spend(self, seconds):
+            if seconds > self.timeout:
+                clock.now += self.timeout
+                raise TimeoutError("simulated bounded socket timeout")
+            clock.now += seconds
+
+        def sendall(self, data, *args):
+            pass
+
+        def close(self):
+            self.closed = True
+
+        def makefile(self, mode, buffering):
+            class Raw(io.RawIOBase):
+                def readable(raw):
+                    return True
+
+                def readinto(raw, buffer):
+                    if not segments:
+                        return 0
+                    seconds, data = segments.pop(0)
+                    self.spend(seconds)
+                    buffer[: len(data)] = data
+                    return len(data)
+
+            return Raw()
+
+    sock = Socket()
+
+    class Connection(massive._DeadlineHTTPSConnection):
+        def connect(self):
+            sock.settimeout(self.remaining())
+            sock.spend(connect_seconds)
+            self.sock = massive._DeadlineSocket(sock, self.remaining)
+
+    monkeypatch.setattr(massive, "_DeadlineHTTPSConnection", Connection)
+    monkeypatch.setattr(massive.time, "monotonic", clock.time)
+    with pytest.raises(TimeoutError):
+        massive.https_transport("/safe", SecretStr("never-log-this"), 10)
+    assert clock.now == 10
+    assert sock.closed
+
+
+def test_tls_handshake_gets_only_remaining_connect_deadline(monkeypatch):
+    import stock_analyser.massive as massive
+
+    clock = Clock()
+    clock.now = 0
+
+    class Socket:
+        timeout = 10
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def close(self):
+            pass
+
+    sock = Socket()
+
+    def connect(connection):
+        clock.now += 6
+        connection.sock = sock
+
+    class Context:
+        def wrap_socket(self, socket, server_hostname):
+            assert socket.timeout == 4
+            clock.now += socket.timeout
+            raise TimeoutError
+
+    monkeypatch.setattr(massive.http.client.HTTPConnection, "connect", connect)
+
+    def remaining():
+        return 10 - clock.now
+
+    connection = massive._DeadlineHTTPSConnection("api.massive.com", remaining)
+    connection._context = Context()
+    with pytest.raises(TimeoutError):
+        connection.connect()
+    assert clock.now == 10
+    connection.close()
+
+
+def test_transport_cannot_extend_absolute_run_deadline(monkeypatch):
+    import stock_analyser.massive as massive
+
+    seen = []
+
+    class Connection:
+        def __init__(self, host, remaining):
+            seen.append(remaining())
+
+        def request(self, *args, **kwargs):
+            raise TimeoutError
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(massive, "_DeadlineHTTPSConnection", Connection)
+    with pytest.raises(TimeoutError):
+        massive.https_transport("/safe", SecretStr("secret"), 20, deadline=10, clock=lambda: 8)
+    assert seen == [2]
+
+
+def test_dns_deadline_is_bounded_and_no_connect_follows_timeout(monkeypatch):
+    import stock_analyser.massive as massive
+
+    def run(command, **kwargs):
+        assert kwargs["timeout"] == 3
+        assert "secret" not in " ".join(command)
+        raise massive.subprocess.TimeoutExpired(command, 3)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("A timed-out resolver must not start a TCP connection")
+
+    monkeypatch.setattr(massive.subprocess, "run", run)
+    monkeypatch.setattr(massive.socket, "socket", forbidden)
+    connection = massive._DeadlineHTTPSConnection("api.massive.com", lambda: 3)
+    with pytest.raises(TimeoutError, match="DNS deadline"):
+        connection._connect_socket(("api.massive.com", 443), 10)
+
+
+def test_address_retries_share_remaining_dns_and_connect_deadline(monkeypatch):
+    from types import SimpleNamespace
+
+    import stock_analyser.massive as massive
+
+    clock = Clock()
+    clock.now = 0
+    sockets = []
+
+    def resolve(command, **kwargs):
+        clock.now += 6
+        return SimpleNamespace(
+            stdout=json.dumps(
+                [
+                    [2, 1, 6, "", ["192.0.2.1", 443]],
+                    [2, 1, 6, "", ["192.0.2.2", 443]],
+                ]
+            ).encode()
+        )
+
+    class Socket:
+        def __init__(self, *args):
+            self.closed = False
+            sockets.append(self)
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def connect(self, address):
+            if len(sockets) == 1:
+                clock.now += 3
+                raise OSError("first address unavailable")
+            assert self.timeout == 1
+            clock.now += self.timeout
+            raise TimeoutError
+
+        def close(self):
+            self.closed = True
+
+    def remaining():
+        if clock.now >= 10:
+            raise TimeoutError
+        return 10 - clock.now
+
+    monkeypatch.setattr(massive.subprocess, "run", resolve)
+    monkeypatch.setattr(massive.socket, "socket", Socket)
+    connection = massive._DeadlineHTTPSConnection("api.massive.com", remaining)
+    with pytest.raises(TimeoutError):
+        connection._connect_socket(("api.massive.com", 443), 10)
+    assert clock.now == 10 and all(s.closed for s in sockets)

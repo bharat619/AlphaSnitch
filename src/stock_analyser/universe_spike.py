@@ -90,6 +90,9 @@ class Enumeration:
     reason: str = "NO_RESPONSE"
     reported_total: int | None = None
     attempts: int = 0
+    raw_rows: int = 0
+    duplicates: int = 0
+    errors: int = 0
 
     def evidence(self) -> dict:
         return {
@@ -99,6 +102,10 @@ class Enumeration:
             "reason": self.reason,
             "reported_total": self.reported_total,
             "unique_rows": len(self.rows),
+            "raw_rows": self.raw_rows,
+            "duplicates": self.duplicates,
+            "errors": self.errors,
+            "count_kind": "exact" if self.status == "COMPLETE" else "lower_bound",
             "pages": self.pages,
             "sdk_calls_attempted": self.attempts if self.source == "yfinance" else None,
             "metadata_sha256": digest(self.rows),
@@ -106,7 +113,9 @@ class Enumeration:
         }
 
 
-def enumerate_massive(client: MassiveClient, *, max_pages: int = 40) -> Enumeration:
+def enumerate_massive(
+    client: MassiveClient, *, max_pages: int = 40, now=lambda: datetime.now(UTC)
+) -> Enumeration:
     if not 1 <= max_pages <= 100:
         raise ValueError("Invalid page bound")
     query = {
@@ -124,17 +133,21 @@ def enumerate_massive(client: MassiveClient, *, max_pages: int = 40) -> Enumerat
             rows = page.get("results")
             if not isinstance(rows, list) or len(rows) > 1000:
                 raise ValueError("Invalid page")
+            if "count" in page and (type(page["count"]) is not int or page["count"] != len(rows)):
+                raise ValueError("Invalid page count")
             rows = project(rows, REFERENCE_FIELDS, "ticker")
+            result.raw_rows += len(rows)
             result.pages.append(
                 {
                     "rows": len(rows),
                     "sha256": digest(rows),
-                    "retrieved_at": datetime.now(UTC).isoformat(),
+                    "retrieved_at": now().isoformat(),
                     "has_next": page.get("next_url") is not None,
                 }
             )
             for row in rows:
                 if row["ticker"] in seen:
+                    result.duplicates += 1
                     result.reason = "DUPLICATE_IDENTIFIER"
                     return result
                 seen.add(row["ticker"])
@@ -148,13 +161,22 @@ def enumerate_massive(client: MassiveClient, *, max_pages: int = 40) -> Enumerat
             if len(result.pages) >= max_pages:
                 result.status, result.reason = "TRUNCATED", "PAGE_LIMIT"
                 return result
-    except Exception:
+    except KeyboardInterrupt:
+        result.status, result.reason = "TRUNCATED", "INTERRUPTED"
+    except Exception as exc:
         # No exception strings: upstream errors may contain credentials or URLs.
-        result.reason = "RETRIEVAL_OR_SCHEMA_FAILURE"
+        result.errors += 1
+        result.reason = (
+            getattr(exc, "code", None)
+            if getattr(exc, "code", None) in ("DEADLINE", "REQUEST_LIMIT")
+            else "RETRIEVAL_OR_SCHEMA_FAILURE"
+        )
     return result
 
 
-def enumerate_yahoo(screen, *, max_pages: int = 40, page_size: int = 250) -> Enumeration:
+def enumerate_yahoo(
+    screen, *, max_pages: int = 40, page_size: int = 250, now=lambda: datetime.now(UTC)
+) -> Enumeration:
     if not 1 <= max_pages <= 100 or not 1 <= page_size <= 250:
         raise ValueError("Invalid page bound")
     result = Enumeration(
@@ -189,17 +211,19 @@ def enumerate_yahoo(screen, *, max_pages: int = 40, page_size: int = 250) -> Enu
                 return result
             result.reported_total = total
             rows = project(rows, DISCOVERY_FIELDS, "symbol")
+            result.raw_rows += len(rows)
             result.pages.append(
                 {
                     "offset": offset,
                     "rows": len(rows),
                     "total": total,
                     "sha256": digest(rows),
-                    "retrieved_at": datetime.now(UTC).isoformat(),
+                    "retrieved_at": now().isoformat(),
                 }
             )
             for row in rows:
                 if row["symbol"] in seen:
+                    result.duplicates += 1
                     result.reason = "DUPLICATE_IDENTIFIER"
                     return result
                 seen.add(row["symbol"])
@@ -212,8 +236,15 @@ def enumerate_yahoo(screen, *, max_pages: int = 40, page_size: int = 250) -> Enu
                 result.reason = "TOTAL_MISMATCH_OR_EMPTY_PAGE"
                 return result
         result.status, result.reason = "TRUNCATED", "PAGE_LIMIT"
-    except Exception:
-        result.reason = "RETRIEVAL_OR_SCHEMA_FAILURE"
+    except KeyboardInterrupt:
+        result.status, result.reason = "TRUNCATED", "INTERRUPTED"
+    except Exception as exc:
+        result.errors += 1
+        result.reason = (
+            getattr(exc, "code", None)
+            if getattr(exc, "code", None) in ("DEADLINE", "REQUEST_LIMIT")
+            else "RETRIEVAL_OR_SCHEMA_FAILURE"
+        )
     return result
 
 
