@@ -146,3 +146,16 @@ ledger_events = sa.Table(
     sa.Column("idempotency_key", sa.Text, nullable=False, unique=True),
     sa.Column("payload", JSONB, nullable=False),
 )
+
+atr_checkpoints = sa.Table(
+    "atr_checkpoints",
+    metadata,
+    sa.Column("checkpoint_id", sa.String(64), primary_key=True),
+    sa.Column("series_sha256", sa.String(64), nullable=False),
+    sa.Column(
+        "snapshot_id", sa.Uuid, sa.ForeignKey("snapshot_references.snapshot_id"), nullable=False
+    ),
+    sa.Column("observed_session", sa.Date, nullable=False),
+    sa.Column("payload", JSONB, nullable=False),
+    sa.Index("ix_atr_checkpoints_series_session", "series_sha256", "observed_session"),
+)

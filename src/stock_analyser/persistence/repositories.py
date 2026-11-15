@@ -27,6 +27,38 @@ class Repositories:
     def __init__(self, connection):
         self.connection = connection
 
+    def get_snapshot(self, snapshot_id: UUID) -> SnapshotReference:
+        return self._get(s.snapshots, s.snapshots.c.snapshot_id == snapshot_id, SnapshotReference)
+
+    def put_atr_checkpoint(self, checkpoint) -> None:
+        from stock_analyser.atr import ATRCheckpoint
+
+        checkpoint = ATRCheckpoint.model_validate(checkpoint.model_dump(mode="json"))
+        observation = checkpoint.observation
+        snapshot_id = observation.snapshot.metadata.snapshot_id
+        if self.get_snapshot(snapshot_id) != observation.snapshot:
+            raise ValueError("ATR checkpoint differs from registered snapshot")
+        self._immutable(
+            s.atr_checkpoints,
+            {"checkpoint_id": checkpoint.identity},
+            checkpoint,
+            series_sha256=observation.series_sha256,
+            snapshot_id=snapshot_id,
+            observed_session=observation.observed_session,
+        )
+
+    def get_atr_checkpoint(self, checkpoint_id: str):
+        from stock_analyser.atr import ATRCheckpoint
+
+        record = self._get(
+            s.atr_checkpoints,
+            s.atr_checkpoints.c.checkpoint_id == checkpoint_id,
+            ATRCheckpoint,
+        )
+        if record.identity != checkpoint_id:
+            raise ValueError("ATR checkpoint content identity mismatch")
+        return record
+
     def put_universe(self, snapshot) -> None:
         self._immutable(s.universe_snapshots, {"snapshot_id": snapshot.snapshot_id}, snapshot)
 

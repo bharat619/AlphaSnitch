@@ -150,7 +150,7 @@ them only inside its disposable database.
   the fresh-process checklist validates a real TOML and `doctor`.
 - Migrations/integrity: `test_migration_idempotency_and_schema`, migration backfill,
   immutable-record, rollback, hash verification and competing-write tests in
-  `tests/test_persistence.py`; migration head is `0007`.
+  `tests/test_persistence.py`; migration head is `0008` (immutable ATR checkpoints).
 - Selection: `tests/test_universe.py` checks deterministic ties, exclusions,
   classification uncertainty, shortfalls and exact replay of frozen inputs.
 - Completed sessions: `tests/test_calendars.py` covers holidays, exceptional

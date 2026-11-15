@@ -53,7 +53,7 @@ def test_migration_idempotency_and_schema(database):
     database.initialize()
     database.initialize()
     with database.engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0007"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0008"
         assert (
             connection.scalar(sa.select(sa.func.count()).select_from(s.market_configurations)) == 1
         )
@@ -3235,3 +3235,177 @@ def test_resume_external_provider_requires_original_configuration(database, tmp_
         assert repo.get_report_input(run.run_id) == report
     _, status, _ = execute_plan(database, runtime, run.run_id, ExternalProvider("v1"))
     assert status == OperationalStatus.SUCCEEDED
+
+
+def test_atr_checkpoint_persistence_reopen_corrections_and_tampering(database, tmp_path):
+    from stock_analyser.atr import (
+        ATRCheckpoint,
+        observe_atr,
+        observe_atr_with_checkpoint,
+        save_atr_checkpoint,
+    )
+    from stock_analyser.atr_example import atr_example_inputs, example_series, freeze_atr_example
+    from stock_analyser.contracts import AnalysisRequest, HistoryRequirement
+
+    database.initialize()
+    calendar, rows = atr_example_inputs(300)
+    series = example_series(calendar)
+    old, provenance, _, stamp = freeze_atr_example(
+        tmp_path / "original",
+        calendar=calendar,
+        rows=rows[:260],
+        day=calendar.sessions[259].session,
+    )
+    observation = observe_atr(
+        old, series, provenance, calendar, stamp.date(), as_of=stamp, calculated_at=stamp
+    )
+    checkpoint = ATRCheckpoint(observation=observation, created_at=stamp)
+    # A hash-addressed file alone cannot establish the persistence trust root.
+    with pytest.raises(LookupError):
+        save_atr_checkpoint(database, checkpoint, calendar)
+    instrument = series.instrument
+    run = RunRecord(
+        run_id=uuid4(),
+        market=series.market,
+        request=AnalysisRequest(
+            request_id=uuid4(),
+            mode="buy",
+            market_id=series.market.market_id,
+            instrument_ids=(instrument.instrument_id,),
+            requested_as_of=stamp,
+            strategy_version="atr-fixture-1",
+            history=(HistoryRequirement(timeframe="daily", minimum_bars=260),),
+        ),
+        configuration={},
+        source_version={},
+        component_versions={},
+    )
+    with database.write() as repo:
+        repo.put_security(Security(security_id=instrument.security_id, name="ATR fixture"))
+        repo.put_instrument(instrument)
+        repo.create_run(run)
+        repo.attach_snapshot(run.run_id, old)
+    identifier = save_atr_checkpoint(database, checkpoint, calendar)
+    assert save_atr_checkpoint(database, checkpoint, calendar) == identifier
+    with database.read() as repo:
+        assert repo.get_atr_checkpoint(identifier) == checkpoint
+        assert repo.get_snapshot(old.metadata.snapshot_id) == old
+    bad = checkpoint.model_copy(
+        update={"observation": observation.model_copy(update={"value": Decimal(3)})}
+    )
+    with pytest.raises(ValueError, match="authenticated original replay"):
+        save_atr_checkpoint(database, bad, calendar)
+    rows[260].update(open="103", high="104", low="102", close="103")
+    new, prov, _, now = freeze_atr_example(
+        tmp_path / "next",
+        calendar=calendar,
+        rows=rows[:261],
+        day=calendar.sessions[260].session,
+    )
+    result = observe_atr_with_checkpoint(
+        database,
+        new,
+        series,
+        prov,
+        calendar,
+        now.date(),
+        as_of=now,
+        calculated_at=now,
+        checkpoint_id=identifier,
+    )
+    assert result.calculation_mode == "CONTINUED" and result.update_count == 246
+    # Reopen both database state and evidence in an independent interpreter.
+    payload = tmp_path / "request.json"
+    payload.write_text(
+        json.dumps(
+            {
+                "snapshot": new.model_dump(mode="json"),
+                "provenance": prov.model_dump(mode="json"),
+                "series": series.model_dump(mode="json"),
+                "as_of": now.isoformat(),
+                "checkpoint_id": identifier,
+            }
+        )
+    )
+    code = """
+import json, os, sys
+from datetime import datetime
+from pathlib import Path
+from stock_analyser.atr import ATRSeries, ATRProvenance, observe_atr_with_checkpoint
+from stock_analyser.atr_example import atr_example_inputs
+from stock_analyser.persistence import Database
+from stock_analyser.persistence.records import SnapshotReference
+p = json.loads(Path(sys.argv[1]).read_text())
+db = Database(os.environ["ATR_TEST_DATABASE_URL"])
+calendar, _ = atr_example_inputs(300)
+t = datetime.fromisoformat(p["as_of"])
+r = observe_atr_with_checkpoint(db, SnapshotReference.model_validate(p["snapshot"]),
+    ATRSeries.model_validate(p["series"]), ATRProvenance.model_validate(p["provenance"]),
+    calendar, t.date(), as_of=t, calculated_at=t, checkpoint_id=p["checkpoint_id"])
+print(r.model_dump_json())
+db.close()
+"""
+    reopened = subprocess.check_output(
+        [sys.executable, "-c", code, str(payload)],
+        text=True,
+        env={
+            **os.environ,
+            "ATR_TEST_DATABASE_URL": database.engine.url.render_as_string(hide_password=False),
+        },
+    )
+    assert json.loads(reopened) == result.model_dump(mode="json")
+    rows[20]["high"] = "103"
+    corrected, cp, _, now = freeze_atr_example(
+        tmp_path / "corrected",
+        calendar=calendar,
+        rows=rows[:261],
+        day=calendar.sessions[260].session,
+        revision="corrected-adjustment-2",
+    )
+    corrected_result = observe_atr_with_checkpoint(
+        database,
+        corrected,
+        series,
+        cp,
+        calendar,
+        now.date(),
+        as_of=now,
+        calculated_at=now,
+        checkpoint_id=identifier,
+    )
+    assert corrected_result.calculation_mode == "REPLAYED"
+    assert "CHECKPOINT_CONSUMED_HISTORY_CHANGED" in corrected_result.checkpoint_rejections
+    with database.read() as repo:
+        assert repo.get_atr_checkpoint(identifier) == checkpoint
+    # Simulate disk/DB corruption: never trust a matching lookup key blindly.
+    with database.engine.begin() as connection:
+        connection.execute(
+            s.atr_checkpoints.update()
+            .where(s.atr_checkpoints.c.checkpoint_id == identifier)
+            .values(payload=bad.model_dump(mode="json"))
+        )
+    recovered = observe_atr_with_checkpoint(
+        database,
+        new,
+        series,
+        prov,
+        calendar,
+        now.date(),
+        as_of=now,
+        calculated_at=now,
+        checkpoint_id=identifier,
+    )
+    assert recovered.calculation_mode == "REPLAYED" and recovered.value == result.value
+    assert recovered.checkpoint_rejections == ("CHECKPOINT_PERSISTED_RECORD_INVALID",)
+    missing = observe_atr_with_checkpoint(
+        database,
+        new,
+        series,
+        prov,
+        calendar,
+        now.date(),
+        as_of=now,
+        calculated_at=now,
+        checkpoint_id="0" * 64,
+    )
+    assert missing.checkpoint_rejections == ("CHECKPOINT_NOT_FOUND",)
