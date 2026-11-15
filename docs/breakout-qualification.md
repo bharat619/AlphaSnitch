@@ -58,6 +58,10 @@ A zero prior sum is unavailable; zero current volume with a positive baseline is
 a valid failure. A ratio slightly below 1.5 can round to the displayed value 1.5
 and still fail. Display precision never supplies an epsilon or changes a boundary.
 
+Comparison object keys may appear in any JSON order; missing or unexpected keys
+are rejected. The `failed_conditions` array always follows the policy's canonical
+comparison order.
+
 The result embeds the full descriptive observations, their versions, specification
 and provenance hashes, source/row references, exact policy inputs, policy hash,
 calendar resolution, cutoff, availability, individual comparisons and group
@@ -160,10 +164,18 @@ Do not use `--live` for fixture verification. The implementation tests do not
 qualify live providers or establish strategy profitability. Verification results
 and tested source hashes are retained in `docs/evidence/breakout-qualification-verification.json`.
 
-Verification on 15 November 2026: 286 focused tests passed, including 54 new
+Initial verification on 15 November 2026: 286 focused tests passed, including 54 new
 qualification cases. The full committed-source PostgreSQL 18 gate passed all
 855 tests with zero failures, errors or skips, including complete test collection
 and the fresh-process persistence checklist. Lint/format, whitespace, direct code
 review and byte compatibility of all four existing walkthroughs passed. The
 implementation revision is `0efdd5f`; the verification commit changes documentation
 and evidence only.
+
+Review follow-up: key-order-independent validation and canonical failure ordering
+now have twelve regression cases covering stock/SPY PASS, FAIL and UNAVAILABLE
+round trips, replay, invalid keys and failure ordering. Shared helpers centralize
+aggregate status and mandatory-evidence availability without changing precedence.
+All 298 focused tests pass, including 66 qualification cases; lint, formatting and
+whitespace checks pass. The original 855-test local PostgreSQL result above predates
+this follow-up; the full local PostgreSQL gate was not repeated for this fix.

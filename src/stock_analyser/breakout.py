@@ -194,6 +194,10 @@ def _status(checks, unavailable=()):
     )
 
 
+def _failed_conditions(group, comparisons):
+    return tuple(key for key in CHECKS[group] if comparisons.get(key) is False)
+
+
 class GateResult(Contract):
     group: Literal["breakout", "stock_trend", "volume", "spy_trend"]
     status: Status
@@ -212,11 +216,11 @@ class GateResult(Contract):
             ):
                 raise ValueError("Only the SPY research gate can be explicitly disabled")
             return self
-        if tuple(self.comparisons) != CHECKS[self.group]:
+        if set(self.comparisons) != set(CHECKS[self.group]):
             raise ValueError("Gate comparisons differ from the versioned policy")
         if self.status != _status(tuple(self.comparisons.values()), self.unavailable_reasons):
             raise ValueError("Gate status differs from its comparisons and evidence")
-        if self.failed_conditions != tuple(k for k, v in self.comparisons.items() if v is False):
+        if self.failed_conditions != _failed_conditions(self.group, self.comparisons):
             raise ValueError("Gate must retain all failed comparisons")
         if any(v is None for v in self.comparisons.values()) and not self.unavailable_reasons:
             raise ValueError("Unavailable comparisons require evidence reasons")
@@ -229,7 +233,7 @@ def _gate(group, comparisons, reasons=()):
         status=_status(tuple(comparisons.values()), reasons),
         comparisons=comparisons,
         unavailable_reasons=tuple(dict.fromkeys(reasons)),
-        failed_conditions=tuple(k for k, v in comparisons.items() if v is False),
+        failed_conditions=_failed_conditions(group, comparisons),
     )
 
 
@@ -264,6 +268,21 @@ def _gates(policy, price_observation, trend, volume_observation, prices, volumes
         if policy.profile == "stock_with_spy"
         else GateResult(group="spy_trend", status="NOT_ENABLED", comparisons={}),
     )
+
+
+def _assessment_status(gates, context_reasons):
+    active = tuple(g for g in gates if g.status != "NOT_ENABLED")
+    if context_reasons or any(g.status == "UNAVAILABLE" for g in active):
+        return "UNAVAILABLE"
+    return "FAIL" if any(g.status == "FAIL" for g in active) else "PASS"
+
+
+def _assessment_availability(status, resolution, price, volume, trend, spy):
+    """Only mandatory evidence can determine technical assessment availability."""
+    if status == "UNAVAILABLE":
+        return None
+    observations = (price, volume, *trend.observations, *(spy.observations if spy else ()))
+    return max(resolution.periods[-1].available_at, *(o.available_at for o in observations))
 
 
 class BreakoutAssessment(Contract):
@@ -407,25 +426,17 @@ class BreakoutAssessment(Contract):
         )
         if self.gates != expected:
             raise ValueError("Gates differ from retained input comparisons")
-        active = [g for g in self.gates if g.status != "NOT_ENABLED"]
-        status = (
-            "UNAVAILABLE"
-            if self.context_reasons or any(g.status == "UNAVAILABLE" for g in active)
-            else "FAIL"
-            if any(g.status == "FAIL" for g in active)
-            else "PASS"
-        )
+        status = _assessment_status(self.gates, self.context_reasons)
         if self.status != status:
             raise ValueError("Aggregate status differs from mandatory gates")
-        available = None
-        if status != "UNAVAILABLE":
-            observations = (
-                *stock_observations,
-                *(self.spy_trend.observations if self.spy_trend else ()),
-            )
-            available = max(
-                self.resolution.periods[-1].available_at, *(o.available_at for o in observations)
-            )
+        available = _assessment_availability(
+            status,
+            self.resolution,
+            self.breakout_observation,
+            self.volume_observation,
+            self.stock_trend,
+            self.spy_trend,
+        )
         if self.available_at != available or (available is not None and available > self.as_of):
             raise ValueError("Assessment availability differs from mandatory evidence")
         return self
@@ -621,25 +632,15 @@ def qualify_breakout(
     gates = _gates(
         policy, price_observation, trend, volume_observation, prices, volumes, spy, spy_reasons
     )
-    active = [g for g in gates if g.status != "NOT_ENABLED"]
-    status = (
-        "UNAVAILABLE"
-        if reasons or any(g.status == "UNAVAILABLE" for g in active)
-        else "FAIL"
-        if any(g.status == "FAIL" for g in active)
-        else "PASS"
+    status = _assessment_status(gates, reasons)
+    available = _assessment_availability(
+        status,
+        resolution,
+        price_observation,
+        volume_observation,
+        trend,
+        spy,
     )
-    available = None
-    if status != "UNAVAILABLE":
-        observations = (
-            price_observation,
-            volume_observation,
-            *trend.observations,
-            *(spy.observations if spy else ()),
-        )
-        available = max(
-            resolution.periods[-1].available_at, *(o.available_at for o in observations)
-        )
     return BreakoutAssessment(
         policy=policy,
         policy_sha256=digest(policy.model_dump(mode="json")),

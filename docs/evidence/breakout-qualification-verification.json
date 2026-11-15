@@ -78,5 +78,29 @@
     "Technical setup qualification only; recommendation eligibility remains NOT_EVALUATED.",
     "No earnings/risk/sizing gate, report integration, or live operation is enabled.",
     "Live provider/sector qualification and performance validation remain open."
-  ]
+  ],
+  "review_followup": {
+    "reviewed_head": "9c0cb249958494ee36d5f391f9fc2c86035b1382",
+    "changes": [
+      "Accept reordered comparison object keys; retain canonical failure array order.",
+      "Share aggregate status and mandatory-evidence availability logic."
+    ],
+    "source_hashes": {
+      "src/stock_analyser/breakout.py": "d2e6a88de9ae74ba9cf5774d4fdcc49e4e9edc88196084692128ae5239d00676",
+      "tests/test_breakout_qualification.py": "66ba82bc1314078004d29eca2561dd22eb0769398695ead22a7175fc8090abc4"
+    },
+    "regression_cases": 12,
+    "before_fix": {
+      "failed": 8,
+      "passed": 4
+    },
+    "focused_tests": {
+      "passed": 298,
+      "qualification_cases": 66
+    },
+    "lint": "PASS",
+    "format": "PASS",
+    "whitespace": "PASS",
+    "local_postgresql_gate": "NOT_RERUN; original 855-test record applies to 0efdd5f only."
+  }
 }

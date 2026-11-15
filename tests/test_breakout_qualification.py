@@ -644,3 +644,68 @@ def test_equal_payloads_for_distinct_instruments_keep_distinct_snapshot_ids(tmp_
     spy = spy_inputs(tmp_path / "spy")["benchmark_snapshot"]
     assert stock.metadata.sources[0].sha256 == spy.metadata.sources[0].sha256
     assert stock.metadata.snapshot_id != spy.metadata.snapshot_id
+
+
+@pytest.mark.parametrize("profile", ["stock", "stock_with_spy"])
+@pytest.mark.parametrize("state", ["PASS", "FAIL", "UNAVAILABLE"])
+def test_reordered_comparison_json_roundtrips_and_replays(tmp_path, profile, state):
+    from stock_analyser.breakout import replay_breakout
+
+    _, _, _, _, rows = breakout_example_inputs()
+    if state != "PASS":
+        for row in rows:
+            row.update(open="100", high="101", low="99", close="100")
+    if state == "UNAVAILABLE":
+        rows.pop(-150)  # SMA200 is unavailable; the other two trend comparisons still fail.
+    inputs = freeze(tmp_path / "stock", rows=rows)
+    kwargs = spy_inputs(tmp_path / "spy", rows=rows) if profile == "stock_with_spy" else {}
+    original = calculate(inputs, profile, **kwargs)
+    assert original.gates[1].status == state
+    if profile == "stock_with_spy":
+        assert original.gates[3].status == state
+    payload = original.model_dump(mode="json")
+    for gate in payload["gates"]:
+        gate["comparisons"] = dict(reversed(tuple(gate["comparisons"].items())))
+    restored = BreakoutAssessment.model_validate_json(json.dumps(payload))
+    assert restored == original
+    assert restored.semantic_bytes() == original.semantic_bytes()
+    assert [g.failed_conditions for g in restored.gates] == [
+        g.failed_conditions for g in original.gates
+    ]
+    replay = replay_breakout(restored, inputs[2], calculated_at=inputs[-1] + timedelta(seconds=1))
+    assert replay.semantic_bytes() == original.semantic_bytes()
+
+
+@pytest.mark.parametrize("group", ["stock_trend", "spy_trend"])
+@pytest.mark.parametrize("mutation", ["missing", "unexpected"])
+def test_comparison_key_set_still_rejects_invalid_keys(group, mutation):
+    from stock_analyser.breakout import GateResult
+
+    comparisons = {
+        "sma50_rising": True,
+        "sma50_above_sma200": True,
+        "close_above_sma50": True,
+    }
+    if mutation == "missing":
+        comparisons.pop("sma50_rising")
+    else:
+        comparisons["unapproved_condition"] = True
+    with pytest.raises(ValidationError, match="comparisons differ"):
+        GateResult(group=group, status="PASS", comparisons=comparisons)
+
+
+@pytest.mark.parametrize("group", ["stock_trend", "spy_trend"])
+def test_gate_construction_retains_canonical_failure_order(group):
+    from stock_analyser.breakout import GateResult, _gate
+
+    gate = _gate(
+        group,
+        {"sma50_rising": False, "sma50_above_sma200": None, "close_above_sma50": False},
+        ("SMA200_UNAVAILABLE",),
+    )
+    assert gate.status == "UNAVAILABLE"
+    assert gate.failed_conditions == ("close_above_sma50", "sma50_rising")
+    payload = gate.model_dump(mode="json")
+    payload["failed_conditions"].reverse()
+    with pytest.raises(ValidationError, match="retain all failed comparisons"):
+        GateResult.model_validate(payload)
