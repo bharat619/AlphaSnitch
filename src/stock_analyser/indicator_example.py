@@ -74,8 +74,11 @@ def freeze_example(
     flags=(),
     minimum_bars=21,
     as_of=None,
+    market_instrument=None,
 ):
     market, instrument, default_calendar, default_rows = example_inputs()
+    if market_instrument is not None:
+        market, instrument = market_instrument
     calendar = calendar or default_calendar
     rows = default_rows if rows is None else rows
     as_of = as_of or datetime(2026, 10, 30, 21, tzinfo=UTC)
@@ -112,10 +115,27 @@ def freeze_example(
     bars, findings, count = validate_prices(response, resolution)
     errors = any(f.severity == "error" for f in findings)
     metadata = EvidenceMetadata(
-        snapshot_id=uuid5(NAMESPACE_URL, raw_hash + adjustment + str(flags)),
+        snapshot_id=uuid5(
+            NAMESPACE_URL,
+            raw_hash
+            + adjustment
+            + str(flags)
+            + (
+                digest(
+                    {
+                        "market": market.model_dump(mode="json"),
+                        "instrument": instrument.model_dump(mode="json"),
+                        "retrieved_at": as_of.isoformat(),
+                        "minimum_bars": minimum_bars,
+                    }
+                )
+                if market_instrument is not None
+                else ""
+            ),
+        ),
         instrument=instrument,
         market=market,
-        currency="USD",
+        currency=instrument.quote_currency,
         session_cutoff=resolution.session_cutoff,
         feed=route.feed,
         timeframe="daily",
