@@ -146,3 +146,18 @@ Risk/entry/stop/target calculations, execution-date price mapping, costs, sizing
 holding assessments, persistence/report composition and live qualification remain
 subsequent slices. This contract does not select a production holding period or
 authorize live use of its example freshness and timing values.
+
+## Verification
+
+On 15 November 2026, implementation commit `c373caa` passed 183 focused tests,
+including 64 earnings cases. The complete PostgreSQL 18 release checklist passed
+all 931 tests with zero failures, errors or skips, complete test collection and
+the fresh-process persistence checklist. Both GitHub CI jobs passed on that
+implementation revision, including all 931 Python 3.12 tests and Windows
+CLI/provider locking. Ruff lint/format and whitespace checks passed.
+
+Source hashes, artifact hashes and gate summaries are retained in
+`docs/evidence/earnings-exposure-verification.json`. The verification follow-up
+changes documentation/evidence only. The first sandboxed local attempt could not
+connect to localhost PostgreSQL; the authorized complete rerun is the recorded
+result. No live source or strategy-performance verification was performed.

@@ -1,0 +1,73 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-11-15T15:29:01.640097+00:00",
+  "implementation_commit": "c373caa4d0010e7269e51fd70169fb2de096857f",
+  "source_hashes": {
+    "src/stock_analyser/earnings.py": "9f470ea3f2fe99ad21fcc88b079fe6178ca281a62ae21e542bfa10e6e7047178",
+    "src/stock_analyser/earnings_example.py": "f53cc0740f0d215e1753030d514ad5b7c025e120ed13918ba09c76d433989e8b",
+    "tests/test_earnings.py": "2a47684a34c4d41e5981c34ea08e8a361c96dbceaba95aad25853f911d7b3f37",
+    "src/stock_analyser/research.py": "e0df4b045df1f918b78f6f5e1918a80dce97a6f5cf4ab1074dd731b7fdc0833a",
+    "src/stock_analyser/calendars.py": "a67ffff89f8532b5e4b1d1d6c0a0cbd1e7be84cced1cd5e282c03a1c401e6b0d",
+    "uv.lock": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee"
+  },
+  "focused_tests": {
+    "passed": 183,
+    "earnings_cases": 64
+  },
+  "full_postgresql18_gate": {
+    "tests": 931,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 931,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "f316e5cad4ef2b13e22405984292d54bed1943a9245b7129bff1cfdad50df4d1",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "full_gate_directory": "/private/tmp/alphasnitch-earnings-foundation-verified",
+  "artifacts_sha256": {
+    "release.json": "f5ccc75c1189934fa7aac2330e5fa789eecd2dca6ddacc1911ea35f5d45d6bdd",
+    "pytest.xml": "0d4f11f4a601efd3faaa67e50b89cf2a79701794628cef743af8e73f5043fdd3",
+    "reopen.json": "f316e5cad4ef2b13e22405984292d54bed1943a9245b7129bff1cfdad50df4d1"
+  },
+  "environment": {
+    "python": "3.12",
+    "source_root": "/private/tmp/alphasnitch-earnings-eligibility",
+    "PYTHONPATH": "/private/tmp/alphasnitch-earnings-eligibility/src",
+    "postgres_project": "alphasnitch-earnings-review",
+    "postgres_port": 55453
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "whitespace": "PASS",
+  "walkthrough": {
+    "cases": [
+      "fits",
+      "overlap",
+      "unknown-coverage",
+      "conflicting-date",
+      "unqualified-source"
+    ],
+    "fresh_process_byte_reproduction": "PASS",
+    "source_backed_replay": "PASS"
+  },
+  "ci": {
+    "head": "c373caa4d0010e7269e51fd70169fb2de096857f",
+    "run_url": "https://github.com/bharat619/AlphaSnitch/actions/runs/43729442148",
+    "python312_postgresql_tests": 931,
+    "windows_cli_provider_locking": "PASS",
+    "lint_format": "PASS"
+  },
+  "review": "Direct code review; no independent reviewer approval claimed.",
+  "excluded_attempt": "The first sandboxed local run could not connect to localhost PostgreSQL. The complete authorized rerun above is the verification result.",
+  "limitations": [
+    "Synthetic research evidence only; observed/live sources remain unqualified.",
+    "Holding duration, timing buffer and source freshness limits require explicit choices; walkthrough values are illustrative.",
+    "Recommendation eligibility remains NOT_EVALUATED; risk, sizing, holdings/report integration and live operation are separate work."
+  ]
+}
