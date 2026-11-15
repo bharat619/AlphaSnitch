@@ -1,0 +1,92 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-11-15T10:34:21.746636+00:00",
+  "implementation_commit": "683bb1b1384554dfa5676ef38482593cceadae71",
+  "source_hashes": {
+    "src/stock_analyser/atr.py": "46f5fcf822f92580f8b276b40073f410abdf53c39221385e50f81590b4332d6b",
+    "src/stock_analyser/atr_example.py": "d63640ab4c9b392dc236fdd85ecefb845107e7513eec71bda125deea991597cc",
+    "src/stock_analyser/persistence/repositories.py": "5a3aace07d107ac902c81b5b3b570facdd951bf587f073c41a308329422f7fbb",
+    "src/stock_analyser/persistence/schema.py": "4f7da2617188027c677701638ccd2f71fa18cd54f5183258609336e1ccd0e40f",
+    "src/stock_analyser/persistence/migrations/versions/0008_atr_checkpoints.py": "8bfa5e029aa6a53a20b967ef8712522803597a28a3030c68a93f16f284ba3158",
+    "tests/test_atr_observations.py": "d96ac8c63ee1f05ba5424a48f7d6255b31a4e26f3118cc7a67a1e9e5fcf2f318",
+    "tests/test_persistence.py": "b5b5ede2eef480b3eed7d18f6843be7b1dec46f1f2b51654f546b524d644f416",
+    "src/stock_analyser/indicators.py": "b7f3b82ac6fb540074ba64d52ed9a5de94454ab658bdffe8b09dcd544ffbc7e3",
+    "src/stock_analyser/calendars.py": "a67ffff89f8532b5e4b1d1d6c0a0cbd1e7be84cced1cd5e282c03a1c401e6b0d",
+    "uv.lock": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee"
+  },
+  "focused_tests": {
+    "passed": 232,
+    "atr_cases": 52
+  },
+  "full_postgresql18_gate": {
+    "tests": 801,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 801,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "0d0e7bb9bfda5eb4b84f82f7a581ddf0bf6bd7cb956b0cb70851e0a0d3377b16",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "full_gate_directory": "/private/tmp/alphasnitch-atr14-foundation-committed",
+  "artifacts_sha256": {
+    "release.json": "17acb1673cc1f77510aafc44ac269091ece44d2d64fca94cdd2ba047f8366fa1",
+    "pytest.xml": "70d5b6d1c56df98136bc04c71c87a3307d322bddf0c14d82da05f4c9bb008396",
+    "reopen.json": "0d0e7bb9bfda5eb4b84f82f7a581ddf0bf6bd7cb956b0cb70851e0a0d3377b16"
+  },
+  "environment": {
+    "python": "3.12",
+    "source_root": "/private/tmp/alphasnitch-atr14",
+    "PYTHONPATH": "/private/tmp/alphasnitch-atr14/src",
+    "postgres_project": "alphasnitch-atr14-review",
+    "postgres_port": 55451
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "whitespace": "PASS",
+  "legacy_walkthroughs": {
+    "indicator_example": {
+      "stdout_sha256": "1b35118bf5b07caa4b34b55d124d857adbe4fd2e3bd9b065e02f7b89e586b0ba",
+      "json_files": 12,
+      "byte_identical": true
+    },
+    "sma_example": {
+      "stdout_sha256": "cdc5f90d75d971792472cfd08c0b6b854f59efb1d19addacf956f00ba8f0f7f0",
+      "json_files": 9,
+      "byte_identical": true
+    },
+    "weekly_example": {
+      "stdout_sha256": "845c508e92676d596c0287fe93c94ad34685c7f9626cb2de5299e4b6ecc5d1aa",
+      "json_files": 15,
+      "byte_identical": true
+    }
+  },
+  "atr_walkthrough": {
+    "directory": "/private/tmp/alphasnitch-atr14-walkthrough",
+    "fresh_process_reproduction": "PASS"
+  },
+  "implementation_ci": {
+    "head": "683bb1b1384554dfa5676ef38482593cceadae71",
+    "tests": "PASS",
+    "windows": "PASS",
+    "run_url": "https://github.com/bharat619/AlphaSnitch/actions/runs/43704292093"
+  },
+  "review": "Direct code review; no independent reviewer approval claimed.",
+  "superseded_gate": {
+    "directory": "/private/tmp/alphasnitch-atr14-foundation-final",
+    "tests": 800,
+    "passed": true,
+    "authoritative_for_final_source": false,
+    "reason": "Started before final canonical decimal representation check and its test."
+  },
+  "limitations": [
+    "Full retained anchor history required even for checkpoint continuation.",
+    "No strategy qualification, risk/sizing, or report integration enabled.",
+    "Live provider/sector qualification and performance validation remain open."
+  ]
+}
