@@ -65,7 +65,9 @@ def example_inputs():
     return market, instrument, calendar, rows
 
 
-def freeze_example(directory, *, rows=None, calendar=None, adjustment="split", flags=()):
+def freeze_example(
+    directory, *, rows=None, calendar=None, adjustment="split", flags=(), minimum_bars=21
+):
     market, instrument, default_calendar, default_rows = example_inputs()
     calendar = calendar or default_calendar
     rows = default_rows if rows is None else rows
@@ -81,7 +83,7 @@ def freeze_example(directory, *, rows=None, calendar=None, adjustment="split", f
         instrument.venue,
         HistoryRequirement(
             timeframe="daily",
-            minimum_bars=21,
+            minimum_bars=minimum_bars,
             adjustment=adjustment,
         ),
         as_of,
@@ -112,7 +114,7 @@ def freeze_example(directory, *, rows=None, calendar=None, adjustment="split", f
         timeframe="daily",
         adjustment=adjustment,
         availability=DataAvailability.PARTIAL if errors else DataAvailability.AVAILABLE,
-        requested_bars=21,
+        requested_bars=minimum_bars,
         returned_bars=count,
         sources=(
             SourceRecord(

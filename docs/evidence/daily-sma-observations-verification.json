@@ -1,0 +1,89 @@
+{
+  "base_revision": "be9b9b34c330bac735acb6cc7bccccffd79e5eef",
+  "branch": "feat/daily-sma-observations",
+  "source_note": "Verification ran before commit; hashes identify the tested implementation and final documentation.",
+  "source_sha256": {
+    "src/stock_analyser/indicators.py": "b7f3b82ac6fb540074ba64d52ed9a5de94454ab658bdffe8b09dcd544ffbc7e3",
+    "src/stock_analyser/indicator_example.py": "585a592a8f8e557f4c2369f08c194d19eda0b72e5f9d131aa3d66bb6d21bf75e",
+    "src/stock_analyser/sma_example.py": "4939d09ce90fa442611a025327e1c8b5064775076c4ed17eaf19994d2257ba6c",
+    "tests/test_sma_observations.py": "a9ef574575a5ade8a4d55d31443315ee83450c23ce79f16eb049ef0ac1444874",
+    "docs/daily-sma-observations.md": "4254970f5e3263cd93a00137db6ad423fc7e1ef8954d89b9f925a96b50222f63"
+  },
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "focused_tests": {
+    "passed": 145,
+    "failures": 0
+  },
+  "foundation_release": {
+    "schema_version": "1",
+    "recorded_at": "2026-11-15T07:08:14.110453+00:00",
+    "source_commit": "be9b9b34c330bac735acb6cc7bccccffd79e5eef",
+    "source_tracked_dirty": true,
+    "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+    "fixture_readiness": {
+      "tests": 713,
+      "failure": 0,
+      "error": 0,
+      "skipped": 0,
+      "passed": true,
+      "expected_tests": 713,
+      "complete_suite": true,
+      "fresh_process_checklist": true,
+      "reopen_sha256": "dd552ff8d9b7344c8f8e32c3b2a817a57f50f0b898deb7e4aba78fcc4d05f03a",
+      "process": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    },
+    "live_observation": {
+      "status": "NOT_RUN",
+      "publication_timing": "unverified"
+    },
+    "pilot_sector": {
+      "status": "FAIL",
+      "full_sector_accepted": false,
+      "blockers": [
+        "INVALID_QUALIFICATION_EVIDENCE"
+      ],
+      "gates": {}
+    },
+    "pilot_sector_source": {
+      "kind": "previous_observation",
+      "reference": "docs/evidence/technology-universe-2026-10-24.json",
+      "sha256": "390db06775fbc3a6ef788f1385a882b3311b3520ec701b9926a0e2f14fe44b6f"
+    },
+    "milestone": {
+      "complete": false,
+      "blockers": [
+        "LIVE_SMOKE_NOT_OBSERVED",
+        "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+      ]
+    },
+    "limitations": "Data readiness only; no recommendation or production reliability claim"
+  },
+  "foundation_evidence_directory": "/private/tmp/alphasnitch-sma-foundation-review",
+  "foundation_evidence_sha256": {
+    "release.json": "3bd5f006239f165b6f3102a437d0bd3bf216dc6da17e1a65e3639c2bf4081223",
+    "reopen.json": "dd552ff8d9b7344c8f8e32c3b2a817a57f50f0b898deb7e4aba78fcc4d05f03a",
+    "pytest.xml": "b941b314ffe21c3fdc12e34d6ddf01bb1c7f7084ac965891cd357ad7a1cc8b8d"
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "review": "Direct code review completed; no additional correctness findings. No independent reviewer approval claimed.",
+  "legacy_walkthrough_compatibility": "PASS: identical stdout and four structured scenario files compared with merged PR 43 at identical fixture paths.",
+  "example_fresh_process_replay": "PASS: identical stdout and structured observation bytes in two fresh processes.",
+  "example_observations_sha256": {
+    "flat-observations.json": "b81d1972423d3234c7f4966bb1e35888edb09d2231baef4c13b27aa6ba190c9b",
+    "missing-old-close-observations.json": "5f2ffe032fe79271c6e4907e7456ceeb71c45ab3fd03b543317dae2eebeb438a",
+    "rising-observations.json": "117a15bd1a80cec291d49b839463824727aa005bcafca0bc689bf87ad82571d6"
+  },
+  "commands": [
+    "With PYTHONPATH set to this checkout/src and the shared locked Python 3.12 environment:",
+    "pytest -q tests/test_sma_observations.py tests/test_indicator_contracts.py tests/test_breakout_observations.py tests/test_calendars.py",
+    "ruff check src tests scripts",
+    "ruff format --check src tests scripts",
+    "With STOCK_ANALYSER_TEST_DATABASE_URL set to isolated PostgreSQL 18 on localhost:55449: python scripts/foundation_release.py --output /private/tmp/alphasnitch-sma-foundation-review"
+  ],
+  "live_gates_cleared": false,
+  "strategy_activated": false
+}
