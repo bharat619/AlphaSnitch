@@ -159,3 +159,11 @@ uv run --locked python scripts/foundation_release.py --output /absolute/path/to/
 Do not use `--live` for fixture verification. The implementation tests do not
 qualify live providers or establish strategy profitability. Verification results
 and tested source hashes are retained in `docs/evidence/breakout-qualification-verification.json`.
+
+Verification on 15 November 2026: 286 focused tests passed, including 54 new
+qualification cases. The full committed-source PostgreSQL 18 gate passed all
+855 tests with zero failures, errors or skips, including complete test collection
+and the fresh-process persistence checklist. Lint/format, whitespace, direct code
+review and byte compatibility of all four existing walkthroughs passed. The
+implementation revision is `0efdd5f`; the verification commit changes documentation
+and evidence only.

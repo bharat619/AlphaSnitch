@@ -1,0 +1,82 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-11-15T12:07:18.903432+00:00",
+  "implementation_commit": "0efdd5f47e8684835d62fd7a0610cb1424b7dd93",
+  "source_hashes": {
+    "src/stock_analyser/breakout.py": "40d01ba011e4349e76b171edc066fcd8830dc62950d57e7e37849ce8f5361f65",
+    "src/stock_analyser/breakout_example.py": "f948cf786225c6fd0949833f2a61c6b34d76f9f7b6265dce8dd4bf6f9fab122d",
+    "src/stock_analyser/indicator_example.py": "a32d5daf2fa76735255218247defb7d7983329aa8264db0161ad4a19b2506e40",
+    "src/stock_analyser/indicators.py": "b7f3b82ac6fb540074ba64d52ed9a5de94454ab658bdffe8b09dcd544ffbc7e3",
+    "src/stock_analyser/weekly_context.py": "f5fb6df1ec871a50b74687ded6d280edfb28796db9bf8e7661fc6daf8f4e9f0b",
+    "src/stock_analyser/calendars.py": "a67ffff89f8532b5e4b1d1d6c0a0cbd1e7be84cced1cd5e282c03a1c401e6b0d",
+    "tests/test_breakout_qualification.py": "b53a7d498cb1543a78f2caa667fff5ef02e1dc37ecefa69bd1128c52d8f7d160",
+    "uv.lock": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee"
+  },
+  "focused_tests": {
+    "passed": 286,
+    "qualification_cases": 54
+  },
+  "full_postgresql18_gate": {
+    "tests": 855,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 855,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "8e7fc733d2c0204f50728c6fbb83050864492a1ee5f6e58fbe4cd0f2a912745e",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "full_gate_directory": "/private/tmp/alphasnitch-breakout-foundation-committed",
+  "artifacts_sha256": {
+    "release.json": "fd74204ce44ead3bd1b3763d1aa8099ac41a5251e4dbd84fdbad7c7152576f1f",
+    "pytest.xml": "2f5cdd2e285616391ae09f320e91174851f65373264d05fe2727c4e2796a3068",
+    "reopen.json": "8e7fc733d2c0204f50728c6fbb83050864492a1ee5f6e58fbe4cd0f2a912745e"
+  },
+  "environment": {
+    "python": "3.12",
+    "source_root": "/private/tmp/alphasnitch-breakout-qualification",
+    "PYTHONPATH": "/private/tmp/alphasnitch-breakout-qualification/src",
+    "postgres_project": "alphasnitch-breakout-review",
+    "postgres_port": 55452
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "whitespace": "PASS",
+  "legacy_walkthroughs": {
+    "indicator_example": {
+      "stdout_sha256": "b1c9e6023039c6919194b12bdef4d59ec83d6599932bc7e083c4542a345f9c86",
+      "json_files": 12,
+      "byte_identical": true
+    },
+    "sma_example": {
+      "stdout_sha256": "cdc5f90d75d971792472cfd08c0b6b854f59efb1d19addacf956f00ba8f0f7f0",
+      "json_files": 9,
+      "byte_identical": true
+    },
+    "weekly_example": {
+      "stdout_sha256": "845c508e92676d596c0287fe93c94ad34685c7f9626cb2de5299e4b6ecc5d1aa",
+      "json_files": 15,
+      "byte_identical": true
+    },
+    "atr_example": {
+      "stdout_sha256": "a278726833abf6a19bc4f3697a19a3a5e39a8462d2775eac126d811ce5160764",
+      "json_files": 19,
+      "byte_identical": true
+    }
+  },
+  "qualification_walkthrough": {
+    "directory": "/private/tmp/alphasnitch-breakout-walkthrough",
+    "fresh_process_reproduction": "PASS"
+  },
+  "review": "Direct code review; no independent reviewer approval claimed.",
+  "limitations": [
+    "Technical setup qualification only; recommendation eligibility remains NOT_EVALUATED.",
+    "No earnings/risk/sizing gate, report integration, or live operation is enabled.",
+    "Live provider/sector qualification and performance validation remain open."
+  ]
+}
