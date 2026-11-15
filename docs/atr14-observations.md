@@ -146,3 +146,11 @@ uv run --locked python scripts/foundation_release.py --output /absolute/path/to/
 Do not add `--live` for this fixture verification. Verification results and source
 hashes are retained in `docs/evidence/atr14-verification.json`. Tests establish
 implementation behavior, not live data qualification or strategy performance.
+
+Verification on 15 November 2026: 232 focused tests passed, including 52 ATR
+cases. The full committed-source PostgreSQL 18 gate passed all 801 tests with
+zero failures, errors or skips; complete collection and the fresh-process
+persistence checklist passed. Lint/format, direct code review and legacy
+walkthrough byte compatibility passed. Both GitHub jobs passed on implementation
+commit `683bb1b`. An earlier 800-test run predating the final canonical-state
+representation check is recorded separately and is not final-source evidence.
