@@ -1,0 +1,94 @@
+{
+  "base_revision": "f268320f867adec06395d13397b3d4af6e7dd93b",
+  "dependency_pr": "https://github.com/bharat619/AlphaSnitch/pull/44",
+  "branch": "feat/weekly-trend-context",
+  "source_note": "Verification ran before commit; hashes identify the tested implementation and final documentation.",
+  "source_sha256": {
+    "src/stock_analyser/weekly_context.py": "f5fb6df1ec871a50b74687ded6d280edfb28796db9bf8e7661fc6daf8f4e9f0b",
+    "src/stock_analyser/weekly_example.py": "ae456405a68c68d0bbdcfc044e5b904108070b353138ed4c2e24dccda9c33ae1",
+    "src/stock_analyser/indicator_example.py": "955a176c1acb2cfa2a40a9152d7b5a8c09cc0567147bdfa1205ce025ad250880",
+    "tests/test_weekly_context.py": "0769d37eecf19b9a50f3a21d697da9d6e1d1802856d1b6efd358ed667df9d23f",
+    "docs/weekly-trend-context.md": "274bc9be63f6598f8a2404938e37b30e6460a2bfa8d3bbd5d72f732415f99a5d"
+  },
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "focused_tests": {
+    "passed": 180,
+    "weekly_context_cases": 35,
+    "failures": 0
+  },
+  "foundation_release": {
+    "schema_version": "1",
+    "recorded_at": "2026-11-15T07:42:38.004872+00:00",
+    "source_commit": "f268320f867adec06395d13397b3d4af6e7dd93b",
+    "source_tracked_dirty": true,
+    "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+    "fixture_readiness": {
+      "tests": 748,
+      "failure": 0,
+      "error": 0,
+      "skipped": 0,
+      "passed": true,
+      "expected_tests": 748,
+      "complete_suite": true,
+      "fresh_process_checklist": true,
+      "reopen_sha256": "b97804aa675276911963300598fedda0b64da9bad6840603eb3ab92ab80a6466",
+      "process": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    },
+    "live_observation": {
+      "status": "NOT_RUN",
+      "publication_timing": "unverified"
+    },
+    "pilot_sector": {
+      "status": "FAIL",
+      "full_sector_accepted": false,
+      "blockers": [
+        "INVALID_QUALIFICATION_EVIDENCE"
+      ],
+      "gates": {}
+    },
+    "pilot_sector_source": {
+      "kind": "previous_observation",
+      "reference": "docs/evidence/technology-universe-2026-10-24.json",
+      "sha256": "390db06775fbc3a6ef788f1385a882b3311b3520ec701b9926a0e2f14fe44b6f"
+    },
+    "milestone": {
+      "complete": false,
+      "blockers": [
+        "LIVE_SMOKE_NOT_OBSERVED",
+        "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+      ]
+    },
+    "limitations": "Data readiness only; no recommendation or production reliability claim"
+  },
+  "foundation_evidence_directory": "/private/tmp/alphasnitch-weekly-foundation-final",
+  "foundation_evidence_sha256": {
+    "release.json": "390eea9986f4fd4f8910ec91a44f73200e2099feb8c1604aed6ef29c6a1972e7",
+    "reopen.json": "b97804aa675276911963300598fedda0b64da9bad6840603eb3ab92ab80a6466",
+    "pytest.xml": "95a68e5955892b0f2b7e4622718b25584a5deef33e47af39bebc31bd8ec5bc0f"
+  },
+  "interrupted_attempt": "The earlier /private/tmp/alphasnitch-weekly-foundation-review run was interrupted by a tool-server restart before writing final evidence; it is not counted as a pass.",
+  "lint": "PASS",
+  "format": "PASS",
+  "review": "Direct code review completed; no independent reviewer approval claimed.",
+  "legacy_walkthrough_compatibility": "PASS: prior breakout and daily SMA stdout and structured scenario files were byte-identical against PR 44 at identical fixture paths.",
+  "example_fresh_process_replay": "PASS: identical stdout and structured observation bytes in two fresh processes; a later calculation timestamp leaves semantic bytes unchanged.",
+  "example_observations_sha256": {
+    "flat-observations.json": "29d16abfe430f9acd1c2bc31d80212c1256e28a13da700bcc342b40e20761119",
+    "missing-constituent-observations.json": "69b4291e17f002044eb60204e1f7dd361af1b78efc259cfe1db1fc1a4af907b5",
+    "mixed-observations.json": "51438312e822413e6ba5db78fa8bc1ae5fc53ceca20d0d9efba5ab6b9eb9e757",
+    "opposes-observations.json": "ecc9c9462c1ab529b5614ebe9adc48a76d98b205619ab75be9b79029e6365700",
+    "supports-observations.json": "53f2ebbf36de8e9b8874388c2de0f48ec2af2832a5ef9a1bf055beefb744f64a"
+  },
+  "commands": [
+    "With PYTHONPATH set to this checkout/src and the shared locked Python 3.12 environment:",
+    "pytest -q tests/test_weekly_context.py tests/test_sma_observations.py tests/test_indicator_contracts.py tests/test_breakout_observations.py tests/test_calendars.py",
+    "ruff check src tests scripts",
+    "ruff format --check src tests scripts",
+    "With STOCK_ANALYSER_TEST_DATABASE_URL set to isolated PostgreSQL 18 on localhost:55450: python scripts/foundation_release.py --output /private/tmp/alphasnitch-weekly-foundation-final"
+  ],
+  "live_gates_cleared": false,
+  "strategy_activated": false
+}

@@ -66,12 +66,19 @@ def example_inputs():
 
 
 def freeze_example(
-    directory, *, rows=None, calendar=None, adjustment="split", flags=(), minimum_bars=21
+    directory,
+    *,
+    rows=None,
+    calendar=None,
+    adjustment="split",
+    flags=(),
+    minimum_bars=21,
+    as_of=None,
 ):
     market, instrument, default_calendar, default_rows = example_inputs()
     calendar = calendar or default_calendar
     rows = default_rows if rows is None else rows
-    as_of = datetime(2026, 10, 30, 21, tzinfo=UTC)
+    as_of = as_of or datetime(2026, 10, 30, 21, tzinfo=UTC)
     resolution = HistoryResolver(
         calendar,
         CutoffPolicy(
