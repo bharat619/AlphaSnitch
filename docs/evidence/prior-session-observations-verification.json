@@ -1,0 +1,92 @@
+{
+  "issue": 41,
+  "base_revision": "f9bb159c92a91ffa7d83480843f958c828156adc",
+  "branch": "feat/41-prior-high-rvol",
+  "source_note": "Implementation files are local and uncommitted; source hashes identify tested contents.",
+  "source_sha256": {
+    "src/stock_analyser/indicators.py": "2ccbf59f86e23218d1d77c52eb07e349603446e9594c370521cef1f282954386",
+    "src/stock_analyser/indicator_example.py": "d43cea217a6b3b1e6dad558322dd2077361a522eec50933c98436231261cd7b9",
+    "tests/test_indicator_contracts.py": "52f3cb9bcfec1469a11df11b8ecc159be5db36e86248d3c489f5ec5186fafba3",
+    "tests/test_breakout_observations.py": "85c641ae8c0433488c28873898220dd9dfb1247d08329c930dfbbb7fa494e81a",
+    "docs/prior-session-observations.md": "42ccef9027cb80c087a8a7944fb06afee9007f1dc4ef2835441111e19f4b4191"
+  },
+  "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+  "focused_tests": {
+    "passed": 76,
+    "failures": 0
+  },
+  "foundation_release": {
+    "schema_version": "1",
+    "recorded_at": "2026-11-01T13:31:11.222300+00:00",
+    "source_commit": "f9bb159c92a91ffa7d83480843f958c828156adc",
+    "source_tracked_dirty": false,
+    "lock_sha256": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee",
+    "fixture_readiness": {
+      "tests": 671,
+      "failure": 0,
+      "error": 0,
+      "skipped": 0,
+      "passed": true,
+      "expected_tests": 671,
+      "complete_suite": true,
+      "fresh_process_checklist": true,
+      "reopen_sha256": "d0467261d34e6c0e3009996c5ab71526bba9e03b14ff6e4d12c28c3fa20fef40",
+      "process": {
+        "exit_code": 0,
+        "timed_out": false
+      }
+    },
+    "live_observation": {
+      "status": "NOT_RUN",
+      "publication_timing": "unverified"
+    },
+    "pilot_sector": {
+      "status": "FAIL",
+      "full_sector_accepted": false,
+      "blockers": [
+        "INVALID_QUALIFICATION_EVIDENCE"
+      ],
+      "gates": {}
+    },
+    "pilot_sector_source": {
+      "kind": "previous_observation",
+      "reference": "docs/evidence/technology-universe-2026-10-24.json",
+      "sha256": "390db06775fbc3a6ef788f1385a882b3311b3520ec701b9926a0e2f14fe44b6f"
+    },
+    "milestone": {
+      "complete": false,
+      "blockers": [
+        "LIVE_SMOKE_NOT_OBSERVED",
+        "PILOT_SECTOR_COVERAGE_NOT_QUALIFIED"
+      ]
+    },
+    "limitations": "Data readiness only; no recommendation or production reliability claim"
+  },
+  "foundation_evidence_directory": "/private/tmp/issue41-foundation-final",
+  "foundation_evidence_sha256": {
+    "release.json": "443c5aa6aeb59178ba3157e2fc07dff9ce407c0b8365428d21662511eb38fab2",
+    "reopen.json": "d0467261d34e6c0e3009996c5ab71526bba9e03b14ff6e4d12c28c3fa20fef40",
+    "pytest.xml": "a82200de9b2eb71ea1afd7009f4b5220152ec4608e17cbd45a3942b0129029b6"
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "example_fresh_process_replay": "PASS: identical stdout and structured observation bytes",
+  "example_stdout_sha256": "4d3b0e7f79290ce25722d0addd071b976b317b13101d827925cabe4a927b383b",
+  "example_observations_sha256": {
+    "equal-observations.json": "9660ce3efabe1f9ac4085fc02a3c4c11d913fccd598091085aaec2b10bdfb1ae",
+    "above-observations.json": "1094b24638a6d6ea140370f66f015a492ff52d4af41272ac56062ee46d77259a",
+    "below-observations.json": "23cd4b49bcde1ff89259a5c70644c60c370198ab7e5dd0602cd3a693ac78a0ff",
+    "missing-volume-observations.json": "dc4ebf64188d14c37ddf1c8d465d5822809248354fbbbe097c6e6553ff96ff31"
+  },
+  "commands": [
+    "uv sync --locked",
+    "uv run --locked pytest -q tests/test_indicator_contracts.py tests/test_breakout_observations.py",
+    "uv run --locked ruff check src tests scripts",
+    "uv run --locked ruff format --check src tests scripts",
+    "uv run --locked python -m stock_analyser.indicator_example --output /private/tmp/issue41-example-final",
+    "With STOCK_ANALYSER_TEST_DATABASE_URL set to disposable PostgreSQL 18 on localhost:55441: uv run --locked python scripts/foundation_release.py --output /private/tmp/issue41-foundation-final"
+  ],
+  "owner_walkthrough": "READY, pending owner review before issue closure",
+  "live_gates_cleared": false,
+  "strategy_activated": false
+}
