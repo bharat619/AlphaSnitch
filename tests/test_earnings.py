@@ -330,6 +330,15 @@ def test_old_signal_cannot_be_revived(tmp_path):
     assert result.comparisons["entry_timing"] is False
 
 
+def test_missed_entry_cutoff_remains_failed_when_signal_evidence_is_missing(tmp_path):
+    cutoff = datetime(2026, 11, 9, 14, 15, tzinfo=UTC)
+    result = calculate(tmp_path, ctx=context(signal_available_at=None, as_of=cutoff))
+    assert result.status == "UNAVAILABLE"
+    assert "SIGNAL_EVIDENCE_UNAVAILABLE" in result.unavailable_reasons
+    assert result.comparisons["entry_timing"] is False
+    assert result.failed_conditions == ("entry_timing",)
+
+
 def recent_sources(*, released_at, call_state="NONE_CONFIRMED", call_completed_at=None):
     return tuple(
         source(
@@ -482,6 +491,34 @@ def test_unknown_cross_timezone_date_does_not_become_a_deadline(tmp_path):
     assert result.status == "UNAVAILABLE"
     assert result.pre_event_deadline is None
     assert result.comparisons["full_holding_window"] is None
+
+
+def test_known_overlap_remains_failed_when_another_event_date_is_unknown(tmp_path):
+    sources = []
+    for sid in ("issuer", "independent"):
+        overlap = event(date(2026, 12, 7), source=sid)
+        unknown = event(date(2026, 12, 8), source=sid, event_id="2026-Q4-extra")
+        unknown_observation = unknown.announcement.model_copy(
+            update={
+                "original_timezone": "Asia/Tokyo",
+                "normalized_session_date": None,
+            }
+        )
+        sources.append(
+            source(
+                sid,
+                events=(
+                    overlap,
+                    unknown.model_copy(update={"announcement": unknown_observation}),
+                ),
+            )
+        )
+    result = calculate(tmp_path, sources=sources)
+    assert result.status == "UNAVAILABLE"
+    assert result.pre_event_deadline == datetime(2026, 12, 4, 21, tzinfo=UTC)
+    assert "EVENT_DATE_UNKNOWN" in " ".join(result.unavailable_reasons)
+    assert result.comparisons["full_holding_window"] is False
+    assert result.failed_conditions == ("full_holding_window",)
 
 
 def test_unknown_publication_blocks_even_with_known_event_date(tmp_path):

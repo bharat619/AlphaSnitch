@@ -217,18 +217,19 @@ def _evaluate(context, policy, evidence, calendar, load_errors):
         reasons.append("ENTRY_CUTOFF_UNSET")
     if signal is None or entry is None:
         reasons.append("SIGNAL_OR_ENTRY_SESSION_UNAVAILABLE")
-    elif context.signal_available_at is None or not (
-        signal.closes_at <= context.signal_available_at <= context.as_of
-    ):
-        reasons.append("SIGNAL_EVIDENCE_UNAVAILABLE")
     else:
-        latest = [s for s in calendar.sessions if s.closes_at <= context.as_of]
-        if not latest or latest[-1].session != context.signal_session:
-            reasons.append("SIGNAL_SESSION_STALE")
         if policy.pre_open_buffer_seconds is not None:
             comparisons["entry_timing"] = context.as_of < entry.opens_at - timedelta(
                 seconds=policy.pre_open_buffer_seconds
             )
+        if context.signal_available_at is None or not (
+            signal.closes_at <= context.signal_available_at <= context.as_of
+        ):
+            reasons.append("SIGNAL_EVIDENCE_UNAVAILABLE")
+        else:
+            latest = [s for s in calendar.sessions if s.closes_at <= context.as_of]
+            if not latest or latest[-1].session != context.signal_session:
+                reasons.append("SIGNAL_SESSION_STALE")
 
     selected = []
     if {s.role for s in policy.sources} != {"issuer", "independent"}:
@@ -331,8 +332,11 @@ def _evaluate(context, policy, evidence, calendar, load_errors):
             elif signal:
                 completed = max(recent.released_at, recent.call_completed_at or recent.released_at)
                 post_checks.append(signal.opens_at > completed)
-    if holding and forward_known:
-        comparisons["full_holding_window"] = not deadlines or holding.closes_at <= min(deadlines)
+    if holding:
+        if deadlines and holding.closes_at > min(deadlines):
+            comparisons["full_holding_window"] = False
+        elif forward_known:
+            comparisons["full_holding_window"] = True
     if post_checks:
         comparisons["post_event_session"] = all(post_checks)
     reasons = tuple(dict.fromkeys(reasons))
