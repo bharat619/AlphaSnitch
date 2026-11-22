@@ -10,6 +10,10 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from stock_analyser.atr import ATRProvenance, observe_atr
+from stock_analyser.breakout import qualify_breakout
+from stock_analyser.breakout_example import breakout_example_inputs, freeze_breakout_example
+from stock_analyser.calendars import ExchangeCalendarAdapter
 from stock_analyser.fixtures import FixtureSessionCalendar
 from stock_analyser.risk import RiskAssessment, assess_risk, replay_risk, risk_arithmetic
 from stock_analyser.risk_example import example_inputs
@@ -87,6 +91,28 @@ def test_empty_range_and_missing_inputs_do_not_hide_known_failure():
     checks, _ = risk_arithmetic(101, 102, None, factor=1, tick=1, entry=101)
     assert checks["entry_above_breakout"] is False
     assert checks["net_reward_risk_at_least_two"] is None
+
+
+@pytest.mark.parametrize("close,tick,nonempty", [(363, 9, False), (374, 10, False), (363, 1, None)])
+def test_range_can_be_provably_empty_without_costs(close, tick, nonempty):
+    checks, values = risk_arithmetic(362, close, 2, factor=1, tick=tick)
+    assert checks["levels_on_tick"] is True
+    assert checks["entry_range_nonempty"] is nonempty
+    assert "maximum_entry_tick" not in values
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"entry": "1e-5000"},
+        {"tick": Decimal("1e-5000")},
+        {"factor": Fraction(1, 10**400)},
+        {"win_cost": Decimal("1e5000"), "loss_cost": 0},
+    ],
+)
+def test_arithmetic_rejects_oversized_exact_inputs(kwargs):
+    with pytest.raises(ValueError, match="risk numeric limits"):
+        risk_arithmetic(101, 102, 2, **({"factor": 1} | kwargs))
 
 
 @pytest.fixture(scope="module")
@@ -213,6 +239,76 @@ def test_tampering_and_json_key_order(frozen):
 def test_atr_cannot_be_fabricated_to_improve_ratio(frozen):
     with pytest.raises(ValueError, match="authenticated"):
         calculate(frozen, atr=frozen[1].model_copy(update={"value": Decimal("5")}))
+
+
+def test_unavailable_atr_retains_checkpoint_diagnostics(tmp_path, frozen):
+    original, ready_atr, _, _, calendar = frozen
+    _, _, _, _, rows = breakout_example_inputs()
+    snapshot, provenance, _, stamp = freeze_breakout_example(
+        tmp_path, market=calendar.market, calendar=calendar, rows=rows[1:]
+    )
+    setup = qualify_breakout(
+        snapshot,
+        provenance,
+        calendar,
+        original.policy,
+        as_of=stamp,
+        calculated_at=stamp,
+        cutoff_policy=original.cutoff_policy,
+    )
+    atr_provenance = ATRProvenance(
+        **provenance.model_dump(),
+        adjustment_revision=ready_atr.provenance.adjustment_revision,
+        adjustment_verification_reference=ready_atr.provenance.adjustment_verification_reference,
+    )
+    unavailable = observe_atr(
+        snapshot,
+        ready_atr.series,
+        atr_provenance,
+        calendar,
+        setup.observed_session,
+        as_of=stamp,
+        calculated_at=stamp,
+        checkpoint_id="0" * 64,
+    )
+    assert setup.status == "PASS"
+    assert unavailable.status == "UNAVAILABLE"
+    assert unavailable.checkpoint_rejections == ("CHECKPOINT_NOT_FOUND",)
+    result = calculate(frozen, setup=setup, atr=unavailable, mapping=None, costs=None)
+    assert result.status == "UNAVAILABLE"
+    assert "MISSING_SESSION" in result.unavailable_reasons
+    assert result.atr == unavailable
+    assert replay_risk(result, calendar, calculated_at=stamp) == result
+
+    fabricated = unavailable.model_copy(update={"reasons": ("DIFFERENT_BLOCKER",)})
+    with pytest.raises(ValueError, match="Unavailable ATR differs from authenticated replay"):
+        calculate(frozen, setup=setup, atr=fabricated, mapping=None, costs=None)
+
+
+def test_unsupported_calendar_preserves_signal_blockers(frozen):
+    original = frozen[0]
+    calendar = ExchangeCalendarAdapter()
+    setup = qualify_breakout(
+        original.stock_snapshot,
+        original.stock_provenance,
+        calendar,
+        original.policy,
+        as_of=original.as_of,
+        calculated_at=original.calculated_at,
+        cutoff_policy=original.cutoff_policy,
+    )
+    assert setup.status == "UNAVAILABLE"
+    result = calculate(frozen, setup=setup, atr=None, calendar=calendar)
+    assert result.status == "UNAVAILABLE"
+    assert result.entry_session is result.calendar_data_version is None
+    assert "UNSUPPORTED_CALENDAR" in result.unavailable_reasons
+    assert "EXECUTION_SESSION_UNAVAILABLE" in result.unavailable_reasons
+    assert replay_risk(result, calendar, calculated_at=setup.as_of) == result
+
+
+def test_oversized_proposed_entry_rejected_before_arithmetic(frozen):
+    with pytest.raises(ValueError, match="risk numeric limits"):
+        calculate(frozen, proposed_entry=Decimal("1e-5000"))
 
 
 def test_missing_execution_calendar_blocks(frozen):

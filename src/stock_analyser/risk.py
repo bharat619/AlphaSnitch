@@ -1,13 +1,13 @@
 """Exact research risk levels over authenticated breakout and ATR evidence."""
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from typing import Annotated, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
+from pydantic import AfterValidator, AwareDatetime, Field, TypeAdapter, model_validator
 
 from stock_analyser.atr import ATRCheckpoint, ATRObservation, authenticate_checkpoint, observe_atr
 from stock_analyser.breakout import BreakoutAssessment, replay_breakout
@@ -16,8 +16,25 @@ from stock_analyser.calendars import CalendarSession, SessionCalendar
 from stock_analyser.collection import encode
 from stock_analyser.contracts import Contract, Currency, Text
 
-Price = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
-Cost = Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]
+_MAX_COEFFICIENT_DIGITS = 200
+_MAX_ABS_EXPONENT = 200
+_MAX_RATIONAL_DIGITS = _MAX_COEFFICIENT_DIGITS + _MAX_ABS_EXPONENT
+_MAX_RATIONAL_COMPONENT = 10**_MAX_RATIONAL_DIGITS - 1
+_NUMERIC_LIMIT_ERROR = "Input exceeds risk numeric limits"
+
+
+def _bounded_decimal(value: Decimal) -> Decimal:
+    if not value.is_finite():
+        raise ValueError("Risk inputs must be finite")
+    parts = value.as_tuple()
+    if len(parts.digits) > _MAX_COEFFICIENT_DIGITS or abs(parts.exponent) > _MAX_ABS_EXPONENT:
+        raise ValueError(_NUMERIC_LIMIT_ERROR)
+    return value
+
+
+Price = Annotated[Decimal, Field(gt=0, allow_inf_nan=False), AfterValidator(_bounded_decimal)]
+Cost = Annotated[Decimal, Field(ge=0, allow_inf_nan=False), AfterValidator(_bounded_decimal)]
+FactorComponent = Annotated[int, Field(strict=True, gt=0, le=_MAX_RATIONAL_COMPONENT)]
 Hash = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 CHECKS = (
     "atr_positive",
@@ -52,8 +69,8 @@ class ExecutionPriceMapping(Contract):
     execution_session: date
     currency: Currency
     execution_basis: Text
-    factor_numerator: Annotated[int, Field(strict=True, gt=0)]
-    factor_denominator: Annotated[int, Field(strict=True, gt=0)]
+    factor_numerator: FactorComponent
+    factor_denominator: FactorComponent
     price_increment: Price
     verified: bool
     verification_reference: Text | None
@@ -78,10 +95,24 @@ class FixedCostAllowances(Contract):
     available_at: AwareDatetime
 
 
-def _fraction(value):
+def _fraction(value) -> Fraction:
     if isinstance(value, (float, bool)):
         raise ValueError("Risk inputs must use exact decimal or rational values")
-    return Fraction(value)
+    if isinstance(value, Decimal):
+        _bounded_decimal(value)
+    elif isinstance(value, str):
+        if "/" in value:
+            if len(value.strip()) > 4 * _MAX_RATIONAL_DIGITS + 3:
+                raise ValueError(_NUMERIC_LIMIT_ERROR)
+        else:
+            try:
+                _bounded_decimal(Decimal(value))
+            except InvalidOperation as exc:
+                raise ValueError("Risk inputs must use exact decimal or rational values") from exc
+    fraction = Fraction(value)
+    if max(abs(fraction.numerator), fraction.denominator) > _MAX_RATIONAL_COMPONENT:
+        raise ValueError(_NUMERIC_LIMIT_ERROR)
+    return fraction
 
 
 def risk_arithmetic(
@@ -115,12 +146,20 @@ def risk_arithmetic(
                 checks["entry_above_stop"] = e > s
             if t is not None:
                 checks["entry_below_target"] = e < t
+        first_tick = None
         if tick is not None:
             tick = _fraction(tick)
             if tick <= 0:
                 raise ValueError("Price increment must be positive")
+            if b is not None:
+                first_tick = (b // tick + 1) * tick
             if s is not None and t is not None:
                 checks["levels_on_tick"] = (s / tick).denominator == (t / tick).denominator == 1
+                # Nonnegative costs can only lower the entry cap.
+                if first_tick is not None and (
+                    not s < first_tick < t or 3 * first_tick > t + 2 * s
+                ):
+                    checks["entry_range_nonempty"] = False
             if e is not None:
                 checks["entry_on_tick"] = (e / tick).denominator == 1
         if win_cost is not None and loss_cost is not None and s is not None and t is not None:
@@ -129,11 +168,12 @@ def risk_arithmetic(
                 raise ValueError("Cost allowances must be nonnegative")
             cap = (t + 2 * s - cw - 2 * cl) / 3
             values["maximum_entry_exact"] = cap
-            if tick is not None and b is not None:
+            if first_tick is not None:
                 cap_tick = (cap // tick) * tick
-                first_tick = (b // tick + 1) * tick
                 values.update(maximum_entry_tick=cap_tick, minimum_entry_tick=first_tick)
-                checks["entry_range_nonempty"] = first_tick <= cap_tick and s < first_tick < t
+                checks["entry_range_nonempty"] = (
+                    checks["entry_range_nonempty"] is not False and first_tick <= cap_tick
+                )
             if e is not None:
                 reward, loss = t - e - cw, e - s + cl
                 values.update(planned_reward=reward, planned_loss=loss)
@@ -235,7 +275,7 @@ class RiskAssessment(Contract):
     costs: FixedCostAllowances | None
     proposed_entry: Price | None
     entry_session: CalendarSession | None
-    calendar_data_version: Text
+    calendar_data_version: Text | None
     calculated_at: AwareDatetime
     status: Literal["PASS", "FAIL", "UNAVAILABLE"]
     comparisons: dict[str, bool | None]
@@ -250,6 +290,9 @@ class RiskAssessment(Contract):
             raise ValueError("Risk policy hash mismatch")
         if self.calculated_at < self.setup.as_of:
             raise ValueError("Calculation precedes signal cutoff")
+        resolution = self.setup.resolution
+        if self.calendar_data_version != (resolution.calendar_data_version if resolution else None):
+            raise ValueError("Execution calendar version differs from signal resolution")
         if self.entry_session is not None:
             zone = ZoneInfo(self.setup.stock_snapshot.metadata.market.timezone)
             if (
@@ -302,7 +345,9 @@ def assess_risk(
                 as_of=atr.as_of,
                 calculated_at=atr.calculated_at,
             )
-            if replay != atr:
+            # Price evidence cannot reproduce the caller's checkpoint lookup.
+            diagnostics = {"checkpoint_id", "checkpoint_rejections"}
+            if replay.model_dump(exclude=diagnostics) != atr.model_dump(exclude=diagnostics):
                 raise ValueError("Unavailable ATR differs from authenticated replay")
     if mapping is not None:
         mapping = ExecutionPriceMapping.model_validate_json(mapping.model_dump_json())
@@ -333,7 +378,7 @@ def assess_risk(
         costs=costs,
         proposed_entry=proposed_entry,
         entry_session=entry_session,
-        calendar_data_version=calendar.data_version(meta.market, meta.instrument.venue),
+        calendar_data_version=setup.resolution.calendar_data_version if setup.resolution else None,
         calculated_at=calculated_at,
         **_evaluate(setup, atr, mapping, costs, proposed_entry, entry_session),
     )

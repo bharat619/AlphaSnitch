@@ -11,12 +11,17 @@ breakout assessment and fixed-anchor ATR14 observation:
 - Require positive planned loss and reward >= 2 × loss. Equality passes.
 - The exact upper entry bound is (T + 2S - c_win - 2c_loss) / 3. Round this cap
   down to the declared price increment. The first valid entry is the first tick
-  strictly above B. An empty tick range fails.
+  strictly above B. An empty tick range fails. Without costs, an empty range can
+  still be established if the first tick falls outside the strict stop and target
+  bounds or exceeds the maximum possible cap at zero costs.
 
 All arithmetic uses exact rational values from normalized Decimal inputs, including
 the canonically rounded ATR supplied by the existing ATR contract. Comparison
 values serialize as rational strings; they must not be replaced by rounded display
 values. The arithmetic does not depend on the ambient Decimal precision or traps.
+Decimal inputs accept up to 200 coefficient digits and an absolute exponent of
+200. Exact rational inputs accept up to 400 digits per numerator or denominator.
+Inputs outside these limits fail validation before risk arithmetic.
 
 For B=101, C=102, A=2 and c_win=c_loss=0.10, S=99 and T=108. Entries 101.80 and
 101.90 pass the ratio; 101.900001, 102 and 103 fail. At a 0.01 increment,
@@ -30,6 +35,8 @@ and match the signal snapshot, session, cutoff and publication/volume provenance
 An altered ATR value cannot improve the ratio. Unavailable or incompatible ATR
 leaves levels unavailable. Missing costs, entry or mapping have explicit reasons;
 independently known failures remain visible even when aggregate status is UNAVAILABLE.
+Unavailable ATR observations retain any checkpoint lookup diagnostics. Replay
+authenticates their price evidence and blockers independently of those diagnostics.
 
 The result embeds these inputs, the versioned policy/hash, comparisons, canonical
 failure order, exact values and the intended next exchange session. Result JSON
@@ -54,9 +61,11 @@ generic instrument precision field is not assumed to be a verified market tick.
 
 The calendar resolves the first scheduled session after the signal, searching the
 next 32 calendar dates. Missing sessions block the calculation; malformed or
-out-of-order schedules are rejected. Mapping and costs must be available at the
-signal cutoff and match that session. An assessment cutoff at or after its open
-is unavailable. The separate earnings/timing policy retains its explicit pre-open
+out-of-order schedules are rejected. If the signal calendar cannot be resolved,
+the result retains the calendar blockers and has no calendar data version.
+Mapping and costs must be available at the signal cutoff and match that session.
+An assessment cutoff at or after its open is unavailable. The separate
+earnings/timing policy retains its explicit pre-open
 buffer; this risk-only calculation does not replace it or validate a live quote.
 
 The provisional `require_aligned` policy preserves exact stop and target levels.
