@@ -1,0 +1,74 @@
+{
+  "schema_version": "1",
+  "recorded_at": "2026-11-22T12:39:10.115484+00:00",
+  "implementation_commit": "6d718f6a636c42006e6074f70fd555c1593a600a",
+  "source_hashes": {
+    "src/stock_analyser/risk.py": "a54261e4474e17f9bba88224df37b21d0757e130523acfa88890a49a4b2bc425",
+    "src/stock_analyser/risk_example.py": "26190fc1f32daf5fc4152c4c99c46538a0409e5b54430af4ae1dcbc0b32b9df7",
+    "tests/test_risk.py": "a3558279073437e9d9911c8de2b7f413ffc05e5df5041a3c2bc4e3f9dc6de943",
+    "src/stock_analyser/atr.py": "46f5fcf822f92580f8b276b40073f410abdf53c39221385e50f81590b4332d6b",
+    "src/stock_analyser/breakout.py": "d2e6a88de9ae74ba9cf5774d4fdcc49e4e9edc88196084692128ae5239d00676",
+    "src/stock_analyser/calendars.py": "a67ffff89f8532b5e4b1d1d6c0a0cbd1e7be84cced1cd5e282c03a1c401e6b0d",
+    "uv.lock": "9580d81df0c764bd637404912d3612d5b10f3da9fe9b9149fececf66c3e4ddee"
+  },
+  "focused_tests": {
+    "passed": 252,
+    "risk_cases": 41
+  },
+  "full_postgresql18_gate": {
+    "tests": 974,
+    "failure": 0,
+    "error": 0,
+    "skipped": 0,
+    "passed": true,
+    "expected_tests": 974,
+    "complete_suite": true,
+    "fresh_process_checklist": true,
+    "reopen_sha256": "0b6986a84b5babfd02744df09dd454e76469a82221f67b26cd4b114c4391b4d7",
+    "process": {
+      "exit_code": 0,
+      "timed_out": false
+    }
+  },
+  "full_gate_directory": "/Users/bharathegde/Projects/stock-market-analyser/.worktrees/risk-verification-20261122",
+  "artifacts_sha256": {
+    "release.json": "4d3a26b370ecf4eca8a69c0bc140e502ae4225ed4b7e5eee9ed3a9d542aaa229",
+    "pytest.xml": "12158549f3076f9eaa3ae5a783e2187d15e77eb17ef9393723b689ac7d9fc5b5",
+    "reopen.json": "0b6986a84b5babfd02744df09dd454e76469a82221f67b26cd4b114c4391b4d7"
+  },
+  "environment": {
+    "python": "3.12",
+    "source_root": "/Users/bharathegde/Projects/stock-market-analyser/.worktrees/breakout-risk",
+    "PYTHONPATH": "/Users/bharathegde/Projects/stock-market-analyser/.worktrees/breakout-risk/src",
+    "postgres_project": "alphasnitch-risk-review",
+    "postgres_port": 55454
+  },
+  "lint": "PASS",
+  "format": "PASS",
+  "whitespace": "PASS",
+  "walkthrough": {
+    "accepted_arithmetic_example": "PASS",
+    "cases": [
+      "pass",
+      "higher-entry",
+      "missing-costs",
+      "unverified-mapping",
+      "off-tick-levels"
+    ],
+    "authenticated_replay": "PASS",
+    "fresh_process_byte_reproduction": "PASS"
+  },
+  "review": "Direct code review; no independent reviewer approval claimed.",
+  "limitations": [
+    "Research risk calculations only; recommendation eligibility remains NOT_EVALUATED.",
+    "Stop and target must already align to the declared tick; no rounding convention approved.",
+    "Price mappings and fixed cost allowances are explicit caller-supplied evidence assertions; no live provider verification or cost calibration.",
+    "Quantity-dependent fees, sizing, recommendation/report composition and live operation remain separate work."
+  ],
+  "ci": {
+    "head": "6d718f6a636c42006e6074f70fd555c1593a600a",
+    "run_url": "https://github.com/bharat619/AlphaSnitch/actions/runs/45022941336",
+    "python312_postgresql": "PASS",
+    "windows_cli_provider_locking": "PASS"
+  }
+}

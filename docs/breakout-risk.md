@@ -98,3 +98,16 @@ costs, mapping and enumerated schedule are synthetic assertions. No provider,
 broker or model calls occur. Tests also cover split conversion, strict boundaries,
 cost identities, future evidence, corruption, JSON round trips and fresh-process
 reproduction.
+
+## Verification
+
+On 22 November 2026, implementation commit `6d718f6` passed 252 focused tests,
+including 41 risk cases. The full PostgreSQL 18 release checklist passed all
+974 tests with zero failures, errors or skips, complete test collection and the
+fresh-process persistence checklist. Ruff lint/format and whitespace checks passed.
+Both GitHub CI jobs passed on `6d718f6`: the complete Python 3.12/PostgreSQL suite
+and Windows CLI/provider locking.
+Source and artifact hashes are retained in `docs/evidence/breakout-risk-verification.json`.
+The verification follow-up changes documentation/evidence only. These results
+exercise synthetic calculations and application behavior; they do not qualify
+live mapping evidence, cost estimates or strategy performance.
